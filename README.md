@@ -5,114 +5,114 @@
 ![Next.js](https://img.shields.io/badge/Next.js-14-black.svg)
 ![FastAPI](https://img.shields.io/badge/FastAPI-0.104-009688.svg)
 
-**VISTA** est une plateforme open-source de recherche et de développement spécialisée dans **l'inspection visuelle et la détection d'anomalies en image pour le domaine industriel**.
+**VISTA** is an open-source research and development platform specialized in **visual inspection and image anomaly detection for industrial applications**.
 
-Ce projet est une plateforme complète (UI, API, ML Pipeline) inspirée de projets comme Label Studio, mais spécialisée dans l'inspection visuelle, la segmentation et l'analyse d'images.
+This project provides a comprehensive platform (UI, API, ML Pipeline) inspired by projects like Label Studio, uniquely tailored for visual inspection, image segmentation, and image analysis tasks.
 
 ---
 
-## 🏗️ Architecture Monorepo
+## 🏗️ Monorepo Architecture
 
-Le projet est structuré en **Monorepo** pour faciliter le développement de bout en bout (Data → ML → API → UI).
+The project uses a **Monorepo** structure to facilitate end-to-end development (Data → ML → API → UI).
 
 ```text
 vista/
 │
-├── apps/                 # Applications interactives
-│   ├── annotation-ui/    # Frontend web (Next.js, UI d'annotation et segmentation)
-│   └── api/              # Backend (FastAPI, orchestrateur et DB)
+├── apps/                 # Interactive web applications
+│   ├── annotation-ui/    # Frontend web (Next.js, Annotation and segmentation UI)
+│   └── api/              # Backend (FastAPI, orchestrator and DB)
 │
-├── services/             # Microservices & Pipelines métier
-│   ├── ml-core/          # Cœur ML (entraînements, notebooks, baselines)
-│   └── image-processing/ # Workers de traitement d'images (Filtres, Mixup, Crop)
+├── services/             # Microservices & Domain Pipelines
+│   ├── ml-core/          # Core ML (training, notebooks, baselines)
+│   └── image-processing/ # Image processing workers (Filters, Mixup, Crop)
 │
-├── libs/                 # Librairies partagées
-│   ├── image-utils/      # Utilitaires de traitement d'images
-│   ├── dataset-utils/    # Datasets
-│   └── ml-utils/         # Utilitaires ML
+├── libs/                 # Shared libraries
+│   ├── image-utils/      # Image processing utilities
+│   ├── dataset-utils/    # Datasets loaders and managers
+│   └── ml-utils/         # ML utilities
 │
-├── configs/              # Configurations globales du projet (env, infra)
+├── configs/              # Global project configurations (env, infra)
 │
-└── infra/                # Docker, CI/CD, Déploiements
+└── infra/                # Docker, CI/CD, Deployments
 ```
 
 ---
 
-## 🛠️ Fonctionnalités Principales
+## 🛠️ Main Features
 
-- **Annotation et Visualisation** : Charger une image pour l'analyser, appliquer des filtres, annoter des parties (carrés, tracés pour contours exacts), et ajouter des descriptions textuelles.
-- **Comparaison et Traitement Avancé** : Comparer deux images, tester des combinaisons de data augmentation (crop, mixup), appliquer des analyses spectrales, et traiter par lots.
-- **Modélisation et Live Test** : Construire des modèles, test en direct via webcam ou upload, avec des modules d'explicabilité pour comprendre les décisions du modèle.
-- **Déploiement** : Exportation des modèles sous divers formats pour une intégration industrielle.
-
----
-
-## 🛠️ Stack Technique
-
-La plateforme s'appuie sur une stack logicielle moderne :
-
-- **Frontend** : [Next.js](https://nextjs.org/) (React), [Tailwind CSS](https://tailwindcss.com/) pour le rendu web.
-- **Backend & API REST** : [FastAPI](https://fastapi.tiangolo.com/) (Python) pour une API asynchrone ultra-performante.
-- **Base de données** : [PostgreSQL](https://www.postgresql.org/) (via SQLAlchemy) pour le stockage relationnel.
-- **Files d'attente / Workers** : [Redis](https://redis.io/) et [Celery](https://docs.celeryq.dev/) pour l'exécution asynchrone des traitements d'images.
-- **Machine Learning & Image Processing** : `opencv-python`, `Pillow`, `numpy` pour le traitement, et un pipeline d'entraînement agnostique pour les modèles (baselines).
+- **Annotation and Visualization**: Load images for analysis, apply filters, annotate areas (bounding boxes, freehand traces for exact contours), and add textual descriptions.
+- **Comparison and Advanced Processing**: Compare multiple images, test combinations of data augmentation (crop, mixup, etc.), apply spectral analyses, and execute batch processing workloads.
+- **Modeling and Live Testing**: Train machine learning models, run live tests using a webcam or file uploads, and leverage explainability modules to interpret model decisions.
+- **Deployment**: Export models in various formats ready for industrial deployment.
 
 ---
 
-## 🚀 Démarrage Rapide
+## 🛠️ Tech Stack
 
-### Prérequis
-- Python 3.12.8 (géré automatiquement par `uv`)
-- [uv](https://github.com/astral-sh/uv) (Package manager Python ultra-rapide)
-- Node.js 18+ (pour le frontend)
-- Docker Desktop (pour la base de données locale)
+The platform is built on a modern software stack designed for performance and simple deployment:
 
-### 1. Installation globale
+- **Frontend**: [Next.js](https://nextjs.org/) (React) and [Tailwind CSS](https://tailwindcss.com/) for web rendering.
+- **Backend & REST API**: [FastAPI](https://fastapi.tiangolo.com/) (Python) for an ultra-fast asynchronous API.
+- **Database**: [PostgreSQL](https://www.postgresql.org/) (via SQLAlchemy) for relational metadata storage.
+- **Queues / Workers**: [Redis](https://redis.io/) and [Celery](https://docs.celeryq.dev/) for asynchronous background execution of image processing tasks.
+- **Machine Learning & Image Processing**: `opencv-python`, `Pillow`, and `numpy` for core processing, featuring an agnostic training pipeline for models (baselines).
+
+---
+
+## 🚀 Quick Start
+
+### Prerequisites
+- Python 3.12.8 (managed automatically by `uv`)
+- [uv](https://github.com/astral-sh/uv) (Lightning-fast Python package manager)
+- Node.js 18+ (for the frontend)
+- Docker Desktop (for the local database)
+
+### 1. Global Installation
 
 ```bash
-# 1. Cloner le projet
+# 1. Clone the repository
 git clone <repo-url> && cd vista
 
-# 2. Installer les dépendances Python via uv
+# 2. Install Python dependencies using uv
 uv sync
 
-# (Optionnel) Installer les dépendances Node.js du frontend
+# (Optional) Install Node.js dependencies for the frontend
 cd apps/annotation-ui && npm install
 
-# 3. Configurer l'environnement
+# 3. Configure the environment
 cp .env.example .env
 ```
 
-### 2. Lancer la plateforme localement
+### 2. Run the Platform Locally
 
-**Option A : Via Docker Compose (Recommandé pour tester l'API/DB)**
+**Option A: Via Docker Compose (Recommended for testing the API/DB)**
 ```bash
 make docker-up
 ```
 
-**Option B : Développement séparé (Recommandé pour dev)**
+**Option B: Separate Development (Recommended for development)**
 ```bash
-# Terminal 1 : Lancer l'API FastAPI (Port 8000)
-make dev-api # ou : uv run uvicorn main:app --reload
+# Terminal 1: Run the FastAPI backend (Port 8000)
+make dev-api # or: uv run uvicorn main:app --reload
 
-# Terminal 2 : Lancer l'UI Next.js (Port 3000)
+# Terminal 2: Run the Next.js UI (Port 3000)
 make dev-ui
 ```
 
 ---
 
 ## 📚 Documentation
-La documentation technique et scientifique est disponible dans le dossier `docs/` :
-- Architecture et Flux d'Annotation
-- Modèle de base de données PostgreSQL
-- Protocoles d'évaluation ML
-- Guide des Datasets
+Technical and scientific documentation can be found in the `docs/` directory:
+- Architecture and Annotation Flow
+- PostgreSQL Database Schema
+- ML Evaluation Protocols
+- Dataset Guide
 - Roadmap
 
 ---
 
-## 🤝 Contribuer
+## 🤝 Contributing
 
-1. Lisez le [Guide de Contribution (CONTRIBUTING.md)](CONTRIBUTING.md)
-2. Consultez nos règles de [Gouvernance (GOVERNANCE.md)](GOVERNANCE.md)
-3. Renseignez toujours le numéro de ticket Jira (`RND-VISTA-XX`) dans vos branches et commits.
+1. Read the [Contribution Guide (CONTRIBUTING.md)](CONTRIBUTING.md)
+2. Review our [Governance Rules (GOVERNANCE.md)](GOVERNANCE.md)
+3. Always include the Jira ticket number (`RND-VISTA-XX`) in your branches and commits.

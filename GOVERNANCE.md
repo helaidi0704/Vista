@@ -66,7 +66,7 @@ tmp/debug-image-loading
 
 
 Rules:
-- These branches are **not meant to be merged** into `develop`
+- These branches are **not meant to be merged** into `main`
 - They may be deleted at any time
 - If the work becomes relevant, a Jira ticket **must be created**, and the work
   migrated to a proper `feature/` or `bugfix/` branch
@@ -216,15 +216,15 @@ Any change to this document must be discussed and approved via a Pull Request.
 
 ---
 
-## 10. Architecture Monorepo
+## 10. Monorepo Architecture
 
-VISTA est structuré en Monorepo. Les règles suivantes s'appliquent :
-- `apps/` : Contient les applications web déployables (UI Next.js, API FastAPI).
-- `services/` : Contient les microservices et le cœur ML (`ml-core`).
-- `libs/` : Contient les librairies partagées (`image-utils`, etc.). Aucune logique métier spécifique ne doit s'y trouver.
-- `infra/` : Contient la configuration de déploiement (Docker, CI/CD).
+VISTA is structured as a Monorepo. The following rules apply:
+- `apps/`: Contains deployable web applications (Next.js UI, FastAPI backend).
+- `services/`: Contains microservices and the core ML logic (`ml-core`).
+- `libs/`: Contains shared libraries (`image-utils`, etc.). No domain-specific business logic should be placed here.
+- `infra/`: Contains deployment configuration (Docker, CI/CD).
 
-Les dépendances de `libs/` peuvent être importées dans `apps/` ou `services/`, mais **jamais l'inverse**.
+Dependencies from `libs/` can be imported into `apps/` or `services/`, but **never the other way around**.
 
 ---
 

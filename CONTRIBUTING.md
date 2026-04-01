@@ -5,7 +5,7 @@ Thank you for helping improve **VISTA – Visual Inspection for Smart Trial Appl
 ---
 
 ## 1. Prerequisites
-- [uv](https://docs.astral.sh/uv/) (Package manager universel remplaçant pip/poetry)
+- [uv](https://docs.astral.sh/uv/) (Universal package manager replacing pip/poetry)
 - Git
 - Access to the GitHub repository
 - Access to **Jira** for planned development work
@@ -18,14 +18,14 @@ Thank you for helping improve **VISTA – Visual Inspection for Smart Trial Appl
    git clone https://github.com/<org>/<repo>.git
    cd <repo>
    ```
-2. Installer toutes les dépendances via le Makefile :
+2. Install all dependencies via the Makefile:
    ```bash
    make setup
    ```
-3. Lancer l'environnement de développement :
-   - Frontend : `make dev-ui`
-   - Backend : `make dev-api`
-   - Docker : `make docker-up`
+3. Start the development environment:
+   - Frontend: `make dev-ui`
+   - Backend: `make dev-api`
+   - Docker: `make docker-up`
 
 ---
 
