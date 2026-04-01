@@ -11,21 +11,13 @@ This document is **living** and may evolve as the project progresses.
 
 ## 1. Branching Strategy
 
-The repository follows a **three main branches** strategy:
+The repository follows a **GitHub Flow** strategy for simplicity and speed:
 
-- `develop`  
-  Main integration branch for ongoing development and research work.
-
-- `staging`  
-  Pre-release branch. Code merged here is considered **demo-ready** or
-  **evaluation-ready**.
-
-- `prod`  
-  Stable, validated branch. Code merged here is frozen, reproducible, and associated
-  with tagged releases.
+- `main`  
+  The single source of truth. Code merged here is considered stable, deployed (or deployable), and production-ready.
 
 ### Protected branches
-Direct pushes to `develop`, `staging`, and `prod` are **not allowed**.
+Direct pushes to `main` are **not allowed**.
 All changes must go through Pull Requests.
 
 ---
@@ -44,14 +36,14 @@ bugfix/<JIRA-KEY>-short-description
 
 #### Examples
 
-feature/RND-SCOPE-12-add-audio-baseline
+feature/RND-VISTA-12-add-image-baseline
 feature/RND-VISTA-5-mvtec-dataloader
-bugfix/RND-SCOPE-8-fix-evaluation-metric
+bugfix/RND-VISTA-8-fix-evaluation-metric
 
 
 Rules:
 - One Jira ticket = one branch
-- Branches must be created from `develop`
+- Branches must be created from `main`
 - Branch names must include the Jira key
 
 ---
@@ -70,7 +62,7 @@ tmp/<short-description>
 #### Examples
 
 test/try-new-augmentation
-tmp/debug-audio-loading
+tmp/debug-image-loading
 
 
 Rules:
@@ -92,7 +84,7 @@ All commits related to Jira tickets **must include the Jira key**.
 
 #### Examples
 
-RND-SCOPE-12: add MIMII dataloader
+RND-VISTA-12: add MVTec AD dataloader
 RND-VISTA-5: implement baseline autoencoder
 
 
@@ -108,12 +100,12 @@ All changes to protected branches must go through a Pull Request.
 
 ### 4.1 Creating a PR
 
-- Target branch: `develop` (most of the time)
+- Target branch: `main`
 - PR title must include the Jira key
 
 Example:
 
-[RND-SCOPE-12] Add audio anomaly detection baseline
+[RND-VISTA-12] Add image anomaly detection baseline
 
 
 The PR description should include:
@@ -140,12 +132,12 @@ The default merge strategy is:
 👉 **Squash and merge**
 
 Rules:
-- Before merging, the branch **must be rebased** on top of `develop`
+- Before merging, the branch **must be rebased** on top of `main`
 - The squash commit message must include the Jira key
 
 Example squash commit message:
 
-RND-SCOPE-12: add audio anomaly detection baseline
+RND-VISTA-12: add image anomaly detection baseline
 
 
 ---
@@ -161,7 +153,7 @@ A Jira ticket is automatically linked to GitHub when the Jira key appears in:
 
 Rules:
 - Every Story or Bug in Jira must have at least one linked commit or PR
-- No code should be merged into `develop` without an associated Jira ticket
+- No code should be merged into `main` without an associated Jira ticket
   (except for `test/` and `tmp/` branches)
 
 ---
@@ -222,7 +214,19 @@ Future additions may include:
 
 Any change to this document must be discussed and approved via a Pull Request.
 
+---
 
+## 10. Architecture Monorepo
+
+VISTA est structuré en Monorepo. Les règles suivantes s'appliquent :
+- `apps/` : Contient les applications web déployables (UI Next.js, API FastAPI).
+- `services/` : Contient les microservices et le cœur ML (`ml-core`).
+- `libs/` : Contient les librairies partagées (`image-utils`, etc.). Aucune logique métier spécifique ne doit s'y trouver.
+- `infra/` : Contient la configuration de déploiement (Docker, CI/CD).
+
+Les dépendances de `libs/` peuvent être importées dans `apps/` ou `services/`, mais **jamais l'inverse**.
+
+---
 
 ## Pull Request Template
 
