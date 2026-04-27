@@ -1,0 +1,14 @@
+# ═══════════════════════════════════════════
+# VISTA CPU Worker — Lightweight Dependencies
+# ═══════════════════════════════════════════
+
+celery[redis]==5.4.0
+redis==5.0.7
+opencv-python-headless==4.10.0.84
+numpy>=1.26.0
+Pillow>=10.3.0
+boto3==1.34.131
+sqlalchemy==2.0.30
+psycopg2-binary==2.9.9
+pydantic-settings==2.3.4
+python-dotenv==1.0.1

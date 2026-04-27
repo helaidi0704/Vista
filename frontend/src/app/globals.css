@@ -1,0 +1,254 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap');
+
+:root {
+  /* Industrial Vision Theme (Slate & Amber) — from maquette */
+  --bg: #121316;
+  --bg2: #1A1B1F;
+  --bg3: #202227;
+  --bg4: #26282E;
+  --bg-input: #15161A;
+
+  --accent: #E06C00;
+  --accent2: #FFA142;
+  --accent-glow: rgba(224,108,0,0.25);
+  --cyan: #32D74B;
+  --cyan-glow: rgba(50,215,75,0.2);
+  --teal: #00C7BE;
+  --green: #00C7BE;
+  --green-glow: rgba(0,199,190,0.2);
+  --orange: #FFD60A;
+  --red: #FF453A;
+  --yellow: #FFD60A;
+  --purple: #6C63FF;
+
+  --text: #F2F2F7;
+  --text2: #98989D;
+  --text3: #636366;
+  --border: rgba(255,255,255,0.08);
+  --border-accent: rgba(224,108,0,0.4);
+
+  --radius-sm: 8px;
+  --radius-md: 12px;
+  --radius-lg: 16px;
+  --radius-xl: 24px;
+
+  --shadow-card: 0 4px 24px rgba(0,0,0,0.3);
+  --shadow-glow: 0 0 40px rgba(224,108,0,0.15);
+  --transition: 0.2s ease;
+}
+
+*, *::before, *::after { box-sizing: border-box; }
+
+body {
+  font-family: 'Inter', system-ui, sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  -webkit-font-smoothing: antialiased;
+}
+
+/* ========== Scrollbar ========== */
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--bg4); border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: var(--text3); }
+
+/* ========== Card ========== */
+.card {
+  background: var(--bg3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: 20px;
+}
+
+.card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 16px;
+}
+
+.card-title {
+  font-size: 14px;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* ========== Buttons ========== */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 18px;
+  border-radius: var(--radius-sm);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  border: none;
+  transition: all var(--transition);
+  font-family: inherit;
+}
+
+.btn-primary {
+  background: linear-gradient(135deg, var(--accent), var(--accent2));
+  color: #fff;
+  box-shadow: 0 4px 16px var(--accent-glow);
+}
+.btn-primary:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 6px 20px var(--accent-glow);
+}
+
+.btn-secondary {
+  background: var(--bg-input);
+  color: var(--text2);
+  border: 1px solid var(--border);
+}
+.btn-secondary:hover {
+  color: var(--text);
+  border-color: var(--accent);
+}
+
+.btn-danger {
+  background: rgba(255,69,58,0.15);
+  color: var(--red);
+  border: 1px solid rgba(255,69,58,0.3);
+}
+
+.btn-success {
+  background: rgba(0,199,190,0.15);
+  color: var(--green);
+  border: 1px solid rgba(0,199,190,0.3);
+}
+
+.btn-sm { padding: 6px 12px; font-size: 12px; }
+
+/* ========== Tags ========== */
+.tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 10px;
+  border-radius: 100px;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.tag-accent { background: var(--accent-glow); color: var(--accent2); border: 1px solid var(--border-accent); }
+.tag-cyan { background: var(--cyan-glow); color: var(--cyan); border: 1px solid rgba(50,215,75,0.3); }
+.tag-green { background: var(--green-glow); color: var(--green); border: 1px solid rgba(0,199,190,0.3); }
+.tag-red { background: rgba(255,69,58,0.15); color: var(--red); border: 1px solid rgba(255,69,58,0.3); }
+.tag-orange { background: rgba(255,214,10,0.15); color: var(--orange); border: 1px solid rgba(255,214,10,0.3); }
+
+/* ========== Toggle chips ========== */
+.toggle-chip {
+  padding: 6px 14px;
+  border-radius: 100px;
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text2);
+  cursor: pointer;
+  transition: all var(--transition);
+}
+.toggle-chip.active, .toggle-chip:hover {
+  background: var(--accent-glow);
+  border-color: var(--border-accent);
+  color: var(--accent2);
+}
+
+/* ========== Form ========== */
+.form-label { font-size: 12px; font-weight: 500; color: var(--text2); }
+.form-select, .form-input, .form-textarea {
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  font-size: 13px;
+  padding: 9px 12px;
+  font-family: inherit;
+  transition: border-color var(--transition);
+  width: 100%;
+}
+.form-select:focus, .form-input:focus, .form-textarea:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+/* ========== Progress bar ========== */
+.progress-bar {
+  height: 6px;
+  border-radius: 100px;
+  background: var(--bg-input);
+  overflow: hidden;
+}
+.progress-fill {
+  height: 100%;
+  border-radius: 100px;
+  background: linear-gradient(90deg, var(--accent), var(--cyan));
+  transition: width 0.6s ease;
+}
+
+/* ========== Status chip ========== */
+.status-chip {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: var(--green-glow);
+  border: 1px solid rgba(0,199,190,0.3);
+  color: var(--green);
+  border-radius: 100px;
+  padding: 5px 12px;
+  font-size: 12px;
+  font-weight: 500;
+}
+.status-dot {
+  width: 7px;
+  height: 7px;
+  background: var(--green);
+  border-radius: 50%;
+  animation: pulse 2s infinite;
+}
+
+/* ========== Section title ========== */
+.section-title {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text2);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  margin-bottom: 12px;
+}
+
+/* ========== Viz placeholder ========== */
+.viz-placeholder {
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  position: relative;
+  overflow: hidden;
+}
+
+/* ========== Animations ========== */
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.5; }
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.fade-in { animation: fadeIn 0.3s ease forwards; }
+
+@keyframes shimmer {
+  0% { background-position: -200% 0; }
+  100% { background-position: 200% 0; }
+}
+

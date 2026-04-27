@@ -1,0 +1,243 @@
+###############################################################################
+# VISTA — Docker Compose (7 services)
+# Visual Inspection for Smart Industrial Applications
+# ─────────────────────────────────────────────────────────────────────────────
+# Usage:
+#   docker-compose up -d          # Start all services
+#   docker-compose up -d --build  # Rebuild & start
+#   docker-compose logs -f api    # Follow API logs
+#   docker-compose down -v        # Stop & remove volumes
+###############################################################################
+
+version: "3.9"
+
+x-common-env: &common-env
+  POSTGRES_HOST: db
+  POSTGRES_PORT: 5432
+  POSTGRES_DB: vista
+  POSTGRES_USER: vista
+  POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-vista_dev_2024}
+  REDIS_URL: redis://redis:6379/0
+  MINIO_ENDPOINT: minio:9000
+  MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:-vistaadmin}
+  MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:-vistaSecretKey2024}
+  MINIO_BUCKET_IMAGES: images-raw
+  MINIO_BUCKET_MODELS: models-weights
+  MINIO_BUCKET_EXPORTS: exports
+  SECRET_KEY: ${SECRET_KEY:-vista-jwt-secret-change-in-prod}
+
+services:
+  # ═══════════════════════════════════════════════════════════════════════════
+  # 1. FRONTEND — Next.js 14 + React 18 + TypeScript
+  # ═══════════════════════════════════════════════════════════════════════════
+  ui:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: vista-ui
+    ports:
+      - "3000:3000"
+    environment:
+      NEXT_PUBLIC_API_URL: http://localhost:8000
+      NEXT_PUBLIC_WS_URL: ws://localhost:8000
+      NEXT_PUBLIC_MINIO_URL: http://localhost:9000
+    depends_on:
+      api:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:3000/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 10
+      start_period: 120s
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # 2. API GATEWAY — FastAPI + SQLAlchemy + WebSocket
+  # ═══════════════════════════════════════════════════════════════════════════
+  api:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: vista-api
+    ports:
+      - "8000:8000"
+    environment:
+      <<: *common-env
+      CELERY_BROKER_URL: redis://redis:6379/0
+      CELERY_RESULT_BACKEND: redis://redis:6379/1
+    volumes:
+      - ./backend/app:/app/app  # Hot-reload in dev
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # 3. GPU WORKER — PyTorch + Ultralytics + Celery
+  # ═══════════════════════════════════════════════════════════════════════════
+  worker-gpu:
+    build:
+      context: ./worker-gpu
+      dockerfile: Dockerfile
+    container_name: vista-worker-gpu
+    environment:
+      <<: *common-env
+      CELERY_BROKER_URL: redis://redis:6379/0
+      CELERY_RESULT_BACKEND: redis://redis:6379/1
+      NVIDIA_VISIBLE_DEVICES: all
+      CELERY_QUEUE: gpu
+      CELERY_CONCURRENCY: 1
+      MLFLOW_TRACKING_URI: http://mlflow:5000
+    volumes:
+      - model-cache:/app/model-cache
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    restart: unless-stopped
+    # GPU access — uncomment when NVIDIA Docker is available
+#    deploy:
+#      resources:
+#        reservations:
+#          devices:
+#            - driver: nvidia
+#              count: all
+#              capabilities: [gpu]
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # 4. CPU WORKER — OpenCV + Celery (thumbnails, FFT, filters)
+  # ═══════════════════════════════════════════════════════════════════════════
+  worker-cpu:
+    build:
+      context: ./worker-cpu
+      dockerfile: Dockerfile
+    container_name: vista-worker-cpu
+    environment:
+      <<: *common-env
+      CELERY_BROKER_URL: redis://redis:6379/0
+      CELERY_RESULT_BACKEND: redis://redis:6379/1
+      CELERY_QUEUE: cpu
+      CELERY_CONCURRENCY: 4
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # 5. POSTGRESQL 15 — Metadata, annotations, models, jobs
+  # ═══════════════════════════════════════════════════════════════════════════
+  db:
+    image: postgres:15-alpine
+    container_name: vista-db
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_DB: vista
+      POSTGRES_USER: vista
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-vista_dev_2024}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./scripts/init-db.sql:/docker-entrypoint-initdb.d/01-init.sql
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U vista -d vista"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # 6. REDIS 7 — Celery broker + Pub/Sub training metrics + Cache
+  # ═══════════════════════════════════════════════════════════════════════════
+  redis:
+    image: redis:7-alpine
+    container_name: vista-redis
+    ports:
+      - "6379:6379"
+    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
+    volumes:
+      - redisdata:/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # 7. MINIO — S3-compatible object storage (images, models, exports)
+  # ═══════════════════════════════════════════════════════════════════════════
+  minio:
+    image: minio/minio:latest
+    container_name: vista-minio
+    ports:
+      - "9000:9000"   # S3 API
+      - "9001:9001"   # Console Web
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ACCESS_KEY:-vistaadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_SECRET_KEY:-vistaSecretKey2024}
+    command: server /data --console-address ":9001"
+    volumes:
+      - miniodata:/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # 8. MLFLOW — Experiment Tracking + Model Registry
+  # ═══════════════════════════════════════════════════════════════════════════
+  mlflow:
+    build:
+      context: ./mlflow
+      dockerfile: Dockerfile
+    container_name: vista-mlflow
+    ports:
+      - "5000:5000"
+    environment:
+      MLFLOW_BACKEND_STORE_URI: postgresql://vista:${POSTGRES_PASSWORD:-vista_dev_2024}@db:5432/vista
+      MLFLOW_DEFAULT_ARTIFACT_ROOT: s3://mlflow-artifacts
+      AWS_ACCESS_KEY_ID: ${MINIO_ACCESS_KEY:-vistaadmin}
+      AWS_SECRET_ACCESS_KEY: ${MINIO_SECRET_KEY:-vistaSecretKey2024}
+      MLFLOW_S3_ENDPOINT_URL: http://minio:9000
+    depends_on:
+      db:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:5000/health')"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+
+volumes:
+  pgdata:
+    driver: local
+  redisdata:
+    driver: local
+  miniodata:
+    driver: local
+  model-cache:
+    driver: local

@@ -1,0 +1,36 @@
+# ═══════════════════════════════════════════
+# VISTA GPU Worker — Dependencies
+# ═══════════════════════════════════════════
+
+# --- Task Queue ---
+celery[redis]==5.4.0
+redis==5.0.7
+
+# --- Deep Learning ---
+# torch already in base image
+ultralytics==8.2.50
+segmentation-models-pytorch==0.3.3
+torchvision>=0.18.0
+
+# --- Image Processing ---
+albumentations==1.4.10
+opencv-python-headless==4.10.0.84
+numpy>=1.26.0
+Pillow>=10.3.0
+
+# --- Explainability ---
+grad-cam==1.5.4
+
+# --- Export ---
+onnx==1.16.1
+onnxruntime==1.18.0
+
+# --- Storage & DB ---
+boto3==1.34.131
+sqlalchemy==2.0.30
+psycopg2-binary==2.9.9
+
+# --- Utilities ---
+pydantic-settings==2.3.4
+python-dotenv==1.0.1
+mlflow==2.14.0
