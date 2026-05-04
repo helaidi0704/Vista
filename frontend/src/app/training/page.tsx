@@ -1,291 +1,369 @@
 "use client";
-
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, DragEvent } from "react";
 import { api } from "@/lib/api";
-import { useTrainingWebSocket } from "@/lib/useTrainingWS";
 import type { Dataset } from "@/lib/types";
 
-const INPUT_BLOCKS = [
-  { label: "Image RGB", color: "#6C63FF", icon: "🖼️" },
-  { label: "Grayscale", color: "#00D4FF", icon: "⚫" },
-  { label: "Masque (Seg)", color: "#00D4FF", icon: "🎭" },
-  { label: "Image Multi-spec", color: "#00D4FF", icon: "🌈" },
+interface PNode { id:string; type:string; label:string; icon:string; color:string; x:number; y:number; config:Record<string,string>; hasIn:boolean; hasOut:boolean; }
+interface PEdge { id:string; from:string; to:string; }
+interface TJob { id:string; name:string; architecture:string; status:string; current_epoch:number; total_epochs:number; best_metric:number|null; created_at:string; }
+interface MModel { id:string; name:string; architecture:string; map50:number; status:string; }
+
+const PAL = [
+  {cat:"ENTREE IMAGE",items:[
+    {l:"Image RGB",i:"\ud83d\uddbc\ufe0f",c:"#6C63FF",t:"input",cfg:{format:"RGB",size:"512"}},
+    {l:"Grayscale",i:"\u26ab",c:"#00D4FF",t:"input",cfg:{format:"Gray",size:"512"}},
+  ]},
+  {cat:"PRETRAITEMENT",items:[
+    {l:"Resize/Crop",i:"\u2702\ufe0f",c:"#FF9500",t:"pre",cfg:{target:"640",method:"letterbox"}},
+    {l:"Normalisation",i:"\u2696\ufe0f",c:"#FF9500",t:"pre",cfg:{mean:"0.485",std:"0.229"}},
+    {l:"Augmentation",i:"\ud83d\udd04",c:"#FF9500",t:"pre",cfg:{flip:"0.5",rot:"15"}},
+    {l:"Mixup",i:"\ud83d\udd00",c:"#FF9500",t:"pre",cfg:{prob:"0.2",alpha:"0.5"}},
+  ]},
+  {cat:"MODELES VISION",items:[
+    {l:"YOLOv8",i:"\ud83c\udfaf",c:"#00E5A0",t:"model",cfg:{variant:"yolov8s",weights:"COCO",task:"detection"}},
+    {l:"ResNet50",i:"\ud83c\udf32",c:"#00E5A0",t:"model",cfg:{variant:"resnet50",weights:"ImageNet",task:"classification"}},
+    {l:"ViT",i:"\u26a1",c:"#00E5A0",t:"model",cfg:{variant:"vit_b_16",weights:"ImageNet",task:"classification"}},
+    {l:"U-Net",i:"\ud83c\udf0a",c:"#00E5A0",t:"model",cfg:{variant:"unet",weights:"Random",task:"segmentation"}},
+    {l:"CNN Custom",i:"\ud83e\udde0",c:"#00E5A0",t:"model",cfg:{variant:"custom_cnn",weights:"Random",task:"classification"}},
+  ]},
+  {cat:"SORTIE",items:[
+    {l:"NMS & BBox",i:"\ud83d\ude80",c:"#FF4567",t:"output",cfg:{nms:"0.5",conf:"0.25"}},
+    {l:"Classification",i:"\ud83d\udcca",c:"#FF4567",t:"output",cfg:{top_k:"5"}},
+  ]},
 ];
-const PREPROCESS_BLOCKS = [
-  { label: "Resize / Crop", color: "#FF9500", icon: "✂️" },
-  { label: "Normalisation", color: "#FF9500", icon: "⚖️" },
-  { label: "Filtre Sobel/Canny", color: "#FF9500", icon: "🖊️" },
-  { label: "Mixup / Cutmix", color: "#FF9500", icon: "🔀" },
-  { label: "Rotations & Flips", color: "#FF9500", icon: "🔄" },
-];
-const MODEL_BLOCKS = [
-  { label: "CNN Custom", color: "#00E5A0", icon: "🧠" },
-  { label: "ResNet50 / 101", color: "#00E5A0", icon: "🌲" },
-  { label: "YOLOv8", color: "#00E5A0", icon: "🎯" },
-  { label: "Vision Transformer", color: "#00E5A0", icon: "⚡" },
-  { label: "U-Net (Seg)", color: "#00E5A0", icon: "🌊" },
-  { label: "Autoencoder", color: "#00E5A0", icon: "🔄" },
-];
+const NW=160,NH=64,PR=7;
 
-const CONFIG_FIELDS = [
-  { label: "Variation", type: "select", val: "yolov8s", opts: ["yolov8n", "yolov8s", "yolov8m", "yolov8l"] },
-  { label: "Classes (Max)", type: "number", val: "5" },
-  { label: "Init weights", type: "select", val: "COCO", opts: ["COCO", "Random", "Custom"] },
-  { label: "Freezing (Layers)", type: "number", val: "10" },
-  { label: "Optimizer", type: "select", val: "AdamW", opts: ["AdamW", "SGD", "RMSprop"] },
-  { label: "Mixup Prob", type: "range", val: "0.2" },
-  { label: "Mosaic Prob", type: "range", val: "0.5" },
-  { label: "Warmup Epochs", type: "number", val: "3" },
-  { label: "Save Checkpoints", type: "check", val: "true" },
-];
+export default function TrainingPage(){
+  const [ds,setDs]=useState<Dataset[]>([]);
+  const [selDs,setSelDs]=useState("");
+  const [epochs,setEpochs]=useState(50);
+  const [bs,setBs]=useState(16);
+  const [lr,setLr]=useState("0.001");
+  const [opt,setOpt]=useState("AdamW");
+  const [mName,setMName]=useState("YOLOv8_Pipeline_v1");
+  const [trn,setTrn]=useState(false);
+  const [job,setJob]=useState<TJob|null>(null);
+  const [prog,setProg]=useState(0);
+  const [jobs,setJobs]=useState<TJob[]>([]);
+  const [models,setModels]=useState<MModel[]>([]);
+  const [nodes,setNodes]=useState<PNode[]>([]);
+  const [edges,setEdges]=useState<PEdge[]>([]);
+  const [selN,setSelN]=useState<string|null>(null);
+  const [conn,setConn]=useState<string|null>(null);
+  const [dragId,setDragId]=useState<string|null>(null);
+  const [dragOff,setDragOff]=useState({x:0,y:0});
+  const cvRef=useRef<HTMLDivElement>(null);
+  const pollRef=useRef<ReturnType<typeof setInterval>|null>(null);
 
-export default function TrainingPage() {
-  const [datasets, setDatasets] = useState<Dataset[]>([]);
-  const [selectedDs, setSelectedDs] = useState("");
-  const [epochs, setEpochs] = useState(100);
-  const [batchSize, setBatchSize] = useState(16);
-  const [lr, setLr] = useState("1e-3");
-  const [modelName, setModelName] = useState("YOLOv8_Detect_v3");
-  const [training, setTraining] = useState(false);
-  const [progress, setProgress] = useState(0);
-  const [currentEpoch, setCurrentEpoch] = useState(0);
-  const [architecture, setArchitecture] = useState("yolov8s");
-  const [activeJobId, setActiveJobId] = useState<string | null>(null);
+  useEffect(()=>{
+    api.get("/api/v1/datasets").then(({data})=>{setDs(data);if(data.length>0)setSelDs(data[0].id);}).catch(()=>{});
+    api.get("/api/v1/training-jobs").then(({data})=>setJobs(data)).catch(()=>{});
+    api.get("/api/v1/models").then(({data})=>setModels(data)).catch(()=>{});
+  },[]);
 
-  const { metrics, latest, connected } = useTrainingWebSocket(activeJobId);
+  useEffect(()=>{
+    if(!job||!trn)return;
+    pollRef.current=setInterval(async()=>{
+      try{
+        const{data}=await api.get("/api/v1/training-jobs/"+job.id);
+        setJob(data);setProg(data.total_epochs>0?Math.round((data.current_epoch/data.total_epochs)*100):0);
+        if(data.status==="completed"||data.status==="failed"){
+          setTrn(false);if(pollRef.current)clearInterval(pollRef.current);
+          api.get("/api/v1/training-jobs").then(({data})=>setJobs(data)).catch(()=>{});
+          api.get("/api/v1/models").then(({data})=>setModels(data)).catch(()=>{});
+        }
+      }catch(e){console.error(e);}
+    },2000);
+    return()=>{if(pollRef.current)clearInterval(pollRef.current);};
+  },[job,trn]);
 
-  useEffect(() => {
-    api.get("/api/v1/datasets").then(({ data }) => {
-      setDatasets(data);
-      if (data.length > 0) setSelectedDs(data[0].id);
-    }).catch(() => {});
-  }, []);
+  function handleDragStart(e:DragEvent,item:any){
+    e.dataTransfer.setData("text/plain",JSON.stringify(item));
+    e.dataTransfer.effectAllowed="copy";
+  }
 
-  useEffect(() => {
-    if (latest) {
-      setCurrentEpoch(latest.epoch);
-      setProgress(Math.round((latest.epoch / latest.total_epochs) * 100));
-      if (latest.status === "completed" || latest.status === "failed") setTraining(false);
+  function handleCanvasDragOver(e:DragEvent){e.preventDefault();e.dataTransfer.dropEffect="copy";}
+
+  function handleCanvasDrop(e:DragEvent){
+    e.preventDefault();
+    const raw=e.dataTransfer.getData("text/plain");
+    if(!raw)return;
+    try{
+      const item=JSON.parse(raw);
+      const rect=cvRef.current?.getBoundingClientRect();
+      if(!rect)return;
+      const nn:PNode={
+        id:"n_"+Date.now()+"_"+Math.random().toString(36).slice(2,6),
+        type:item.t,label:item.l,icon:item.i,color:item.c,
+        x:Math.max(0,e.clientX-rect.left-NW/2),
+        y:Math.max(0,e.clientY-rect.top-NH/2),
+        config:{...item.cfg},
+        hasIn:item.t!=="input",
+        hasOut:item.t!=="output",
+      };
+      setNodes(p=>[...p,nn]);setSelN(nn.id);
+    }catch(err){console.error(err);}
+  }
+
+  function handleNodeMouseDown(e:React.MouseEvent,id:string){
+    e.stopPropagation();
+    const n=nodes.find(x=>x.id===id);if(!n)return;
+    const rect=cvRef.current?.getBoundingClientRect();if(!rect)return;
+    setDragId(id);
+    setDragOff({x:e.clientX-rect.left-n.x,y:e.clientY-rect.top-n.y});
+    setSelN(id);
+  }
+
+  function handleCanvasMouseMove(e:React.MouseEvent){
+    if(!dragId)return;
+    const rect=cvRef.current?.getBoundingClientRect();if(!rect)return;
+    setNodes(p=>p.map(n=>n.id===dragId?{...n,x:Math.max(0,e.clientX-rect.left-dragOff.x),y:Math.max(0,e.clientY-rect.top-dragOff.y)}:n));
+  }
+
+  function handleCanvasMouseUp(){setDragId(null);}
+
+  function handlePortClick(e:React.MouseEvent,id:string,pt:string){
+    e.stopPropagation();
+    if(pt==="out"){setConn(id);}
+    else if(conn&&conn!==id){
+      if(!edges.some(ed=>ed.from===conn&&ed.to===id))
+        setEdges(p=>[...p,{id:"e_"+Date.now(),from:conn,to:id}]);
+      setConn(null);
     }
-  }, [latest]);
+  }
 
-  async function launchTraining() {
-    if (!selectedDs) return;
-    setTraining(true); setProgress(0); setCurrentEpoch(0);
-    try {
-      const { data } = await api.post("/api/v1/training-jobs", {
-        dataset_id: selectedDs, architecture, task_type: "detection",
-        hyperparams: { epochs, batch_size: batchSize, lr: parseFloat(lr), optimizer: "AdamW" },
-        name: modelName,
+  function delNode(id:string){
+    setNodes(p=>p.filter(n=>n.id!==id));
+    setEdges(p=>p.filter(e=>e.from!==id&&e.to!==id));
+    if(selN===id)setSelN(null);
+  }
+
+  async function launch(){
+    if(!selDs)return;
+    const mn=nodes.find(n=>n.type==="model");
+    setTrn(true);setProg(0);
+    try{
+      const{data}=await api.post("/api/v1/training-jobs",{
+        dataset_id:selDs,architecture:mn?.config.variant||"yolov8s",task_type:"detection",
+        hyperparams:{epochs,batch_size:bs,lr:parseFloat(lr),optimizer:opt,
+          pipeline:nodes.map(n=>({type:n.type,label:n.label,config:n.config}))},
+        name:mName,
       });
-      setActiveJobId(data.id);
-    } catch (e) {
-      console.error(e);
-      // Demo fallback
-      let ep = 0;
-      const iv = setInterval(() => {
-        ep += 2; setCurrentEpoch(ep); setProgress(ep);
-        if (ep >= 100) { clearInterval(iv); setTraining(false); }
-      }, 80);
-    }
+      setJob(data);
+    }catch(e){console.error(e);setTrn(false);}
   }
 
-  function PaletteBlock({ label, color, icon }: { label: string; color: string; icon: string }) {
-    return (
-      <div draggable className="flex items-center gap-2 cursor-grab"
-        style={{ padding: "7px 10px", borderRadius: 6, border: `1px dashed ${color}40`, background: `${color}10`, fontSize: 12, fontWeight: 500, transition: "all 0.15s" }}
-        onMouseEnter={e => { (e.currentTarget as HTMLElement).style.background = `${color}25`; (e.currentTarget as HTMLElement).style.borderStyle = "solid"; }}
-        onMouseLeave={e => { (e.currentTarget as HTMLElement).style.background = `${color}10`; (e.currentTarget as HTMLElement).style.borderStyle = "dashed"; }}>
-        <span>{icon}</span>{label}
-      </div>
-    );
-  }
+  const sn=nodes.find(n=>n.id===selN);
+  const hasModel=nodes.some(n=>n.type==="model");
 
-  return (
-    <div className="fade-in flex gap-4" style={{ height: "calc(100vh - 120px)" }}>
-      {/* Left: Palette + Dataset */}
-      <div className="flex flex-col gap-3 overflow-y-auto shrink-0" style={{ width: 260 }}>
-        <div className="card">
-          <div className="card-header" style={{ marginBottom: 10 }}><span className="card-title">🧱 Blocs disponibles</span></div>
-          <p className="section-title">Entrée Image</p>
-          <div className="flex flex-col gap-1.5" style={{ marginBottom: 12 }}>
-            {INPUT_BLOCKS.map(b => <PaletteBlock key={b.label} {...b} />)}
-          </div>
-          <p className="section-title">Prétraitement & Augm.</p>
-          <div className="flex flex-col gap-1.5" style={{ marginBottom: 12 }}>
-            {PREPROCESS_BLOCKS.map(b => <PaletteBlock key={b.label} {...b} />)}
-          </div>
-          <p className="section-title">Modèles Vision</p>
-          <div className="flex flex-col gap-1.5">
-            {MODEL_BLOCKS.map(b => <PaletteBlock key={b.label} {...b} />)}
-          </div>
-        </div>
-
-        <div className="card">
-          <div className="card-header" style={{ marginBottom: 10 }}><span className="card-title">💾 Dataset Image</span></div>
-          <div className="flex flex-col gap-1.5" style={{ marginBottom: 10 }}>
-            <label className="form-label">Sélectionner un dataset</label>
-            <select className="form-select" style={{ fontSize: 12 }} value={selectedDs} onChange={e => setSelectedDs(e.target.value)}>
-              {datasets.map(d => <option key={d.id} value={d.id}>{d.name} ({d.image_count} img)</option>)}
-            </select>
-          </div>
-          <div className="flex flex-col gap-1.5" style={{ marginBottom: 10 }}>
-            <label className="form-label">Split Train / Val / Test</label>
-            <div className="flex gap-1.5 items-center" style={{ fontSize: 12 }}>
-              <span style={{ color: "var(--accent)" }}>70%</span>
-              <div className="progress-bar" style={{ flex: 1 }}><div className="progress-fill" style={{ width: "70%" }} /></div>
-              <span style={{ color: "var(--cyan)" }}>20%</span>
-              <span style={{ color: "var(--text3)" }}>10%</span>
+  return(
+    <div className="fade-in" style={{display:"flex",gap:16,height:"calc(100vh - 120px)"}}>
+      {/* Left palette */}
+      <div style={{width:220,flexShrink:0,overflowY:"auto",display:"flex",flexDirection:"column",gap:8}}>
+        <div className="card" style={{padding:"12px 14px"}}>
+          <div className="card-header" style={{marginBottom:8}}><span className="card-title">Blocs disponibles</span></div>
+          <div style={{fontSize:10,color:"var(--text3)",marginBottom:10}}>Glissez un bloc sur le canvas \u2192</div>
+          {PAL.map(c=>(
+            <div key={c.cat} style={{marginBottom:10}}>
+              <p className="section-title" style={{marginBottom:6,fontSize:10}}>{c.cat}</p>
+              <div style={{display:"flex",flexDirection:"column",gap:4}}>
+                {c.items.map(b=>(
+                  <div key={b.l} draggable
+                    onDragStart={(e:DragEvent<HTMLDivElement>)=>handleDragStart(e,b)}
+                    style={{display:"flex",alignItems:"center",gap:8,padding:"6px 10px",borderRadius:6,
+                      border:"1px dashed "+b.c+"50",background:b.c+"10",cursor:"grab",fontSize:12,fontWeight:500}}
+                    onMouseEnter={e=>{(e.currentTarget as HTMLElement).style.borderStyle="solid";(e.currentTarget as HTMLElement).style.background=b.c+"25";}}
+                    onMouseLeave={e=>{(e.currentTarget as HTMLElement).style.borderStyle="dashed";(e.currentTarget as HTMLElement).style.background=b.c+"10";}}>
+                    <span style={{fontSize:14}}>{b.i}</span>{b.l}
+                  </div>
+                ))}
+              </div>
             </div>
-          </div>
-          <div className="flex gap-1 flex-wrap">
-            <span className="tag tag-green">OK: 10,240</span>
-            <span className="tag tag-red">Défauts: 4,007</span>
-          </div>
+          ))}
+        </div>
+        <div className="card" style={{padding:"12px 14px"}}>
+          <div className="card-header" style={{marginBottom:6}}><span className="card-title">Dataset</span></div>
+          <select className="form-select" style={{fontSize:12}} value={selDs} onChange={e=>setSelDs(e.target.value)}>
+            {ds.map(d=><option key={d.id} value={d.id}>{d.name} ({d.image_count})</option>)}
+          </select>
         </div>
       </div>
 
-      {/* Center: Pipeline canvas + launch bar */}
-      <div className="flex flex-col gap-3 flex-1" style={{ minWidth: 0 }}>
-        <div className="card flex-1" style={{ position: "relative", overflow: "hidden" }}>
-          <div className="card-header">
-            <span className="card-title">
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" strokeWidth="2"><rect x="2" y="2" width="8" height="8" rx="1"/><rect x="14" y="2" width="8" height="8" rx="1"/><rect x="2" y="14" width="8" height="8" rx="1"/><rect x="14" y="14" width="8" height="8" rx="1"/></svg>
-              Pipeline — Glisser-déposer les blocs
-            </span>
-            <div className="flex gap-1.5">
-              <button className="btn btn-sm btn-secondary">Effacer</button>
-              <button className="btn btn-sm btn-secondary">Importer JSON</button>
-              <button className="btn btn-sm btn-secondary">Exporter JSON</button>
+      {/* Center: Canvas + Launch + History */}
+      <div style={{flex:1,display:"flex",flexDirection:"column",gap:12,minWidth:0}}>
+        <div className="card" style={{flex:1,position:"relative",overflow:"hidden",padding:0}}>
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"10px 16px",borderBottom:"1px solid var(--border)"}}>
+            <span className="card-title" style={{fontSize:13}}>Pipeline \u2014 Glisser-deposer les blocs</span>
+            <div style={{display:"flex",gap:6}}>
+              <button className="btn btn-sm btn-secondary" onClick={()=>{setNodes([]);setEdges([]);setSelN(null);}}>Effacer</button>
+              <span style={{fontSize:11,color:"var(--text3)",padding:"4px 8px"}}>{nodes.length} blocs, {edges.length} liens</span>
             </div>
           </div>
-          {/* SVG Pipeline — matching maquette exactly */}
-          <svg style={{ width: "100%", height: "calc(100% - 50px)", background: "var(--bg-input)", borderRadius: 8, overflow: "visible", cursor: "move" }}>
-            <defs>
-              <marker id="arr" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
-                <path d="M0,0 L0,6 L8,3 z" fill="rgba(108,99,255,0.8)" />
-              </marker>
-              <pattern id="grid" width="24" height="24" patternUnits="userSpaceOnUse">
-                <circle cx="1" cy="1" r="0.8" fill="rgba(255,255,255,0.05)" />
-              </pattern>
-            </defs>
-            <rect width="100%" height="100%" fill="url(#grid)" />
-
-            {/* Block: Image Input */}
-            <g transform="translate(30,80)">
-              <rect width="130" height="56" rx="10" fill="#1A1D35" stroke="#6C63FF" strokeWidth="1.5" />
-              <text x="18" y="22" fill="#8B85FF" fontSize="11" fontWeight="600" fontFamily="Inter">🖼️ Image RGB</text>
-              <text x="18" y="38" fill="#555A7A" fontSize="9" fontFamily="Inter">W, H = Auto</text>
-              <circle cx="130" cy="28" r="5" fill="#6C63FF" stroke="#0D0E1A" strokeWidth="2" />
-            </g>
-            {/* Block: Resize */}
-            <g transform="translate(220,40)">
-              <rect width="130" height="56" rx="10" fill="#1A1D35" stroke="#FF9500" strokeWidth="1.5" />
-              <text x="18" y="22" fill="#FF9500" fontSize="11" fontWeight="600" fontFamily="Inter">✂️ Resize</text>
-              <text x="18" y="38" fill="#555A7A" fontSize="9" fontFamily="Inter">640x640px</text>
-              <circle cx="0" cy="28" r="5" fill="#FF9500" stroke="#0D0E1A" strokeWidth="2" />
-              <circle cx="130" cy="28" r="5" fill="#FF9500" stroke="#0D0E1A" strokeWidth="2" />
-            </g>
-            {/* Block: Data Aug */}
-            <g transform="translate(220,130)">
-              <rect width="130" height="56" rx="10" fill="#1A1D35" stroke="#FF9500" strokeWidth="1.5" />
-              <text x="18" y="22" fill="#FF9500" fontSize="11" fontWeight="600" fontFamily="Inter">🔄 Augmentation</text>
-              <text x="18" y="38" fill="#555A7A" fontSize="9" fontFamily="Inter">RandRot, Flip, Hue</text>
-              <circle cx="0" cy="28" r="5" fill="#FF9500" stroke="#0D0E1A" strokeWidth="2" />
-              <circle cx="130" cy="28" r="5" fill="#FF9500" stroke="#0D0E1A" strokeWidth="2" />
-            </g>
-            {/* Block: YOLOv8 */}
-            <g transform="translate(420,80)">
-              <rect width="150" height="70" rx="10" fill="#1A1D35" stroke="#00E5A0" strokeWidth="1.5" />
-              <text x="18" y="22" fill="#00E5A0" fontSize="11" fontWeight="600" fontFamily="Inter">🎯 YOLOv8</text>
-              <text x="18" y="38" fill="#555A7A" fontSize="9" fontFamily="Inter">Object Detection</text>
-              <text x="18" y="52" fill="#555A7A" fontSize="9" fontFamily="Inter">Pretrained yolov8s.pt</text>
-              <circle cx="0" cy="35" r="5" fill="#00E5A0" stroke="#0D0E1A" strokeWidth="2" />
-              <circle cx="150" cy="35" r="5" fill="#00E5A0" stroke="#0D0E1A" strokeWidth="2" />
-            </g>
-            {/* Block: Output */}
-            <g transform="translate(640,80)">
-              <rect width="130" height="56" rx="10" fill="#1A1D35" stroke="#FF4567" strokeWidth="1.5" />
-              <text x="18" y="22" fill="#FF4567" fontSize="11" fontWeight="600" fontFamily="Inter">🚀 NMS & Sorties</text>
-              <text x="18" y="38" fill="#555A7A" fontSize="9" fontFamily="Inter">BBox, Conf, Classes</text>
-              <circle cx="0" cy="28" r="5" fill="#FF4567" stroke="#0D0E1A" strokeWidth="2" />
-            </g>
-            {/* Connections */}
-            <line x1="160" y1="108" x2="220" y2="68" stroke="rgba(108,99,255,0.6)" strokeWidth="1.5" strokeDasharray="4,3" markerEnd="url(#arr)" />
-            <line x1="160" y1="108" x2="220" y2="158" stroke="rgba(108,99,255,0.6)" strokeWidth="1.5" strokeDasharray="4,3" markerEnd="url(#arr)" />
-            <line x1="350" y1="68" x2="420" y2="108" stroke="rgba(255,149,0,0.6)" strokeWidth="1.5" strokeDasharray="4,3" markerEnd="url(#arr)" />
-            <line x1="350" y1="158" x2="420" y2="108" stroke="rgba(255,149,0,0.6)" strokeWidth="1.5" strokeDasharray="4,3" markerEnd="url(#arr)" />
-            <line x1="570" y1="115" x2="640" y2="108" stroke="rgba(0,229,160,0.6)" strokeWidth="1.5" strokeDasharray="4,3" markerEnd="url(#arr)" />
-          </svg>
+          <div ref={cvRef}
+            style={{width:"100%",height:"calc(100% - 44px)",background:"var(--bg-input)",position:"relative",
+              cursor:conn?"crosshair":dragId?"grabbing":"default",overflow:"hidden"}}
+            onDragOver={handleCanvasDragOver}
+            onDrop={handleCanvasDrop}
+            onMouseMove={handleCanvasMouseMove}
+            onMouseUp={handleCanvasMouseUp}
+            onClick={()=>{setSelN(null);setConn(null);}}>
+            {/* Grid + Edges SVG */}
+            <svg style={{position:"absolute",top:0,left:0,width:"100%",height:"100%",pointerEvents:"none"}}>
+              <defs><pattern id="grid" width="24" height="24" patternUnits="userSpaceOnUse"><circle cx="1" cy="1" r=".8" fill="rgba(255,255,255,0.05)"/></pattern></defs>
+              <rect width="100%" height="100%" fill="url(#grid)"/>
+              {edges.map(ed=>{
+                const f=nodes.find(n=>n.id===ed.from),t=nodes.find(n=>n.id===ed.to);
+                if(!f||!t)return null;
+                const x1=f.x+NW,y1=f.y+NH/2,x2=t.x,y2=t.y+NH/2,mx=(x1+x2)/2;
+                return(<g key={ed.id}>
+                  <path d={"M"+x1+","+y1+" C"+mx+","+y1+" "+mx+","+y2+" "+x2+","+y2}
+                    fill="none" stroke="rgba(108,99,255,0.6)" strokeWidth="2" strokeDasharray="6,3"/>
+                  <circle cx={x2} cy={y2} r="4" fill="#6C63FF"/>
+                </g>);
+              })}
+            </svg>
+            {/* Empty state */}
+            {nodes.length===0&&(
+              <div style={{position:"absolute",top:"50%",left:"50%",transform:"translate(-50%,-50%)",textAlign:"center",color:"var(--text3)",fontSize:13,pointerEvents:"none"}}>
+                <div style={{fontSize:40,marginBottom:12,opacity:0.3}}>+</div>
+                Glissez des blocs depuis la palette<br/>
+                <span style={{fontSize:11}}>Puis connectez: clic port droit \u2192 clic port gauche</span>
+              </div>
+            )}
+            {/* Nodes */}
+            {nodes.map(n=>(
+              <div key={n.id}
+                style={{position:"absolute",left:n.x,top:n.y,width:NW,height:NH,
+                  background:"#1A1D35",border:"1.5px solid "+(selN===n.id?n.color:n.color+"80"),
+                  borderRadius:10,cursor:dragId===n.id?"grabbing":"grab",
+                  boxShadow:selN===n.id?"0 0 12px "+n.color+"40":"none",
+                  zIndex:dragId===n.id?100:1,userSelect:"none"}}
+                onMouseDown={e=>handleNodeMouseDown(e,n.id)}
+                onClick={e=>{e.stopPropagation();setSelN(n.id);}}>
+                {/* Delete X */}
+                <div onClick={e=>{e.stopPropagation();delNode(n.id);}}
+                  style={{position:"absolute",top:-8,right:-8,width:18,height:18,
+                    background:"var(--red)",borderRadius:"50%",display:"flex",alignItems:"center",justifyContent:"center",
+                    cursor:"pointer",fontSize:10,color:"#fff",fontWeight:700,
+                    opacity:selN===n.id?1:0,transition:"opacity 0.2s"}}>x</div>
+                {/* Content */}
+                <div style={{padding:"8px 12px",display:"flex",alignItems:"center",gap:8,height:"100%"}}>
+                  <span style={{fontSize:16}}>{n.icon}</span>
+                  <div>
+                    <div style={{fontSize:11,fontWeight:600,color:n.color}}>{n.label}</div>
+                    <div style={{fontSize:9,color:"#555A7A"}}>{Object.entries(n.config).slice(0,2).map(([k,v])=>k+"="+v).join(", ")}</div>
+                  </div>
+                </div>
+                {/* Input port */}
+                {n.hasIn&&(
+                  <div onClick={e=>handlePortClick(e,n.id,"in")}
+                    style={{position:"absolute",left:-PR,top:NH/2-PR,width:PR*2,height:PR*2,
+                      borderRadius:"50%",background:conn?n.color:n.color+"80",
+                      border:"2px solid #0D0E1A",cursor:"pointer",zIndex:10}}/>
+                )}
+                {/* Output port */}
+                {n.hasOut&&(
+                  <div onClick={e=>handlePortClick(e,n.id,"out")}
+                    style={{position:"absolute",right:-PR,top:NH/2-PR,width:PR*2,height:PR*2,
+                      borderRadius:"50%",background:conn===n.id?"#FFD60A":n.color+"80",
+                      border:"2px solid #0D0E1A",cursor:"pointer",zIndex:10}}/>
+                )}
+              </div>
+            ))}
+          </div>
         </div>
 
         {/* Launch bar */}
-        <div className="card" style={{ padding: 16 }}>
-          <div className="flex items-center gap-4 flex-wrap">
-            <div className="flex items-center gap-2">
-              <label className="form-label" style={{ whiteSpace: "nowrap" }}>Epochs:</label>
-              <input type="number" className="form-input" value={epochs} onChange={e => setEpochs(Number(e.target.value))} style={{ width: 70, fontSize: 12 }} />
-            </div>
-            <div className="flex items-center gap-2">
-              <label className="form-label" style={{ whiteSpace: "nowrap" }}>Batch size:</label>
-              <input type="number" className="form-input" value={batchSize} onChange={e => setBatchSize(Number(e.target.value))} style={{ width: 70, fontSize: 12 }} />
-            </div>
-            <div className="flex items-center gap-2">
-              <label className="form-label" style={{ whiteSpace: "nowrap" }}>Learning rate:</label>
-              <input type="text" className="form-input" value={lr} onChange={e => setLr(e.target.value)} style={{ width: 80, fontSize: 12 }} />
-            </div>
-            <div className="flex items-center gap-2">
-              <label className="form-label" style={{ whiteSpace: "nowrap" }}>Nom du modèle:</label>
-              <input type="text" className="form-input" value={modelName} onChange={e => setModelName(e.target.value)} style={{ width: 140, fontSize: 12 }} />
-            </div>
-            <button className="btn btn-primary" style={{ marginLeft: "auto" }} onClick={launchTraining} disabled={training}>
-              {training ? (
-                <><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></svg> Entraînement en cours…</>
-              ) : progress >= 100 ? "✅ Terminé — Sauvegardé" : (
-                <><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polygon points="5 3 19 12 5 21 5 3"/></svg> Lancer l&apos;entraînement</>
-              )}
-            </button>
+        <div className="card" style={{padding:14}}>
+          <div style={{display:"flex",alignItems:"center",gap:10,flexWrap:"wrap"}}>
+            <div style={{display:"flex",alignItems:"center",gap:4}}><label className="form-label">Epochs:</label>
+              <input type="number" className="form-input" value={epochs} onChange={e=>setEpochs(Number(e.target.value))} style={{width:60,fontSize:12}}/></div>
+            <div style={{display:"flex",alignItems:"center",gap:4}}><label className="form-label">Batch:</label>
+              <input type="number" className="form-input" value={bs} onChange={e=>setBs(Number(e.target.value))} style={{width:50,fontSize:12}}/></div>
+            <div style={{display:"flex",alignItems:"center",gap:4}}><label className="form-label">LR:</label>
+              <input type="text" className="form-input" value={lr} onChange={e=>setLr(e.target.value)} style={{width:70,fontSize:12}}/></div>
+            <div style={{display:"flex",alignItems:"center",gap:4}}><label className="form-label">Opt:</label>
+              <select className="form-select" style={{width:85,fontSize:12}} value={opt} onChange={e=>setOpt(e.target.value)}>
+                {["AdamW","SGD","RMSprop"].map(o=><option key={o}>{o}</option>)}</select></div>
+            <div style={{display:"flex",alignItems:"center",gap:4}}><label className="form-label">Nom:</label>
+              <input type="text" className="form-input" value={mName} onChange={e=>setMName(e.target.value)} style={{width:150,fontSize:12}}/></div>
+            <button className="btn btn-primary" style={{marginLeft:"auto"}} onClick={launch}
+              disabled={trn||!selDs||!hasModel}>
+              {trn?"Entrainement...":!hasModel?"Ajoutez un modele":"Lancer l\u2019entrainement"}</button>
           </div>
-          {training && (
-            <div style={{ marginTop: 14 }}>
-              <div className="flex justify-between" style={{ fontSize: 12, color: "var(--text2)", marginBottom: 6 }}>
-                <span>Epoch {currentEpoch} / {epochs}</span>
-                <span>Box Loss: <span style={{ color: "var(--accent)" }}>{latest?.train_loss?.toFixed(2) || "0.84"}</span> · Val mAP50: <span style={{ color: "var(--green)" }}>{latest ? `${(latest.map50 * 100).toFixed(1)}%` : "82.4%"}</span></span>
-                <span>ETA: {latest?.eta_seconds ? `${Math.floor(latest.eta_seconds / 60)}m` : "—"}</span>
+          {(trn||job?.status==="completed")&&(
+            <div style={{marginTop:12}}>
+              <div style={{display:"flex",justifyContent:"space-between",fontSize:12,color:"var(--text2)",marginBottom:6}}>
+                <span>Epoch {job?.current_epoch||0}/{job?.total_epochs||epochs}</span>
+                <span>mAP: <span style={{color:"var(--green)",fontWeight:600}}>{job?.best_metric?(job.best_metric*100).toFixed(1)+"%":"..."}</span></span>
+                <span style={{color:job?.status==="completed"?"var(--green)":"var(--accent)",fontWeight:600}}>{job?.status}</span>
               </div>
-              <div className="progress-bar" style={{ height: 8 }}>
-                <div className="progress-fill" style={{ width: `${progress}%` }} />
-              </div>
+              <div className="progress-bar" style={{height:8}}><div className="progress-fill" style={{width:prog+"%"}}/></div>
             </div>
           )}
         </div>
+
+        {/* History */}
+        <div className="card" style={{maxHeight:140,overflowY:"auto",padding:"10px 14px"}}>
+          <div className="card-header" style={{marginBottom:6}}><span className="card-title" style={{fontSize:12}}>Historique</span></div>
+          <table style={{width:"100%",borderCollapse:"collapse",fontSize:11}}>
+            <thead><tr style={{color:"var(--text3)"}}>
+              {["Nom","Arch","Epochs","mAP","Status"].map(h=><th key={h} style={{textAlign:"left",padding:"4px 8px",borderBottom:"1px solid var(--border)"}}>{h}</th>)}
+            </tr></thead>
+            <tbody>{jobs.slice(0,5).map(j=>(
+              <tr key={j.id} style={{borderBottom:"1px solid var(--border)"}}>
+                <td style={{padding:"4px 8px",fontWeight:500}}>{j.name}</td>
+                <td style={{padding:"4px 8px"}}>{j.architecture}</td>
+                <td style={{padding:"4px 8px"}}>{j.current_epoch}/{j.total_epochs}</td>
+                <td style={{padding:"4px 8px",color:"var(--green)",fontWeight:600}}>{j.best_metric?(j.best_metric*100).toFixed(1)+"%":"-"}</td>
+                <td style={{padding:"4px 8px"}}><span className={"tag "+(j.status==="completed"?"tag-green":"tag-orange")}>{j.status}</span></td>
+              </tr>
+            ))}</tbody>
+          </table>
+        </div>
       </div>
 
-      {/* Right: Config panel */}
-      <div className="card overflow-y-auto shrink-0" style={{ width: 220 }}>
-        <div className="card-header" style={{ marginBottom: 12 }}><span className="card-title">⚙️ Config: YOLOv8</span></div>
-        {CONFIG_FIELDS.map(c => (
-          <div key={c.label} className="flex flex-col gap-1" style={{ marginBottom: 10 }}>
-            <label className="form-label">{c.label}</label>
-            {c.type === "select" ? (
-              <select className="form-select" style={{ fontSize: 12 }} defaultValue={c.val} onChange={e => { if (c.label === "Variation") setArchitecture(e.target.value); }}>
-                {c.opts!.map(o => <option key={o}>{o}</option>)}
-              </select>
-            ) : c.type === "range" ? (
-              <div className="flex gap-2 items-center">
-                <input type="range" min="0" max="1" step="0.1" defaultValue={c.val} style={{ flex: 1, accentColor: "var(--accent)" }} />
-                <span style={{ fontSize: 11, color: "var(--text2)", width: 28 }}>{c.val}</span>
-              </div>
-            ) : c.type === "check" ? (
-              <label className="flex items-center gap-2 cursor-pointer">
-                <input type="checkbox" defaultChecked={c.val === "true"} style={{ accentColor: "var(--accent)" }} />
-                <span style={{ fontSize: 12 }}>{c.val === "true" ? "Oui" : "Non"}</span>
-              </label>
-            ) : (
-              <input type={c.type} className="form-input" defaultValue={c.val} style={{ fontSize: 12 }} />
-            )}
+      {/* Right: Config + Models */}
+      <div style={{width:220,flexShrink:0,display:"flex",flexDirection:"column",gap:12,overflowY:"auto"}}>
+        <div className="card" style={{padding:"12px 14px"}}>
+          <div className="card-header" style={{marginBottom:8}}>
+            <span className="card-title" style={{fontSize:12}}>{sn?"Config: "+sn.label:"Selection"}</span>
           </div>
-        ))}
+          {sn?(
+            <div style={{display:"flex",flexDirection:"column",gap:8}}>
+              {Object.entries(sn.config).map(([k,v])=>(
+                <div key={k}><label className="form-label">{k}</label>
+                  <input className="form-input" style={{fontSize:12,marginTop:4}} value={v}
+                    onChange={e=>setNodes(p=>p.map(n=>n.id===sn.id?{...n,config:{...n.config,[k]:e.target.value}}:n))}/></div>
+              ))}
+              <button className="btn btn-sm btn-danger" style={{marginTop:4}} onClick={()=>delNode(sn.id)}>Supprimer</button>
+            </div>
+          ):(
+            <div style={{fontSize:12,color:"var(--text3)",textAlign:"center",padding:12}}>Cliquez un bloc pour configurer</div>
+          )}
+        </div>
+        {conn&&(
+          <div className="card" style={{padding:"10px 14px",border:"1px solid var(--accent)"}}>
+            <div style={{fontSize:12,color:"var(--accent)",fontWeight:600}}>Mode connexion</div>
+            <div style={{fontSize:11,color:"var(--text2)",marginTop:4}}>Cliquez le port gauche d un autre bloc</div>
+            <button className="btn btn-sm btn-secondary" style={{marginTop:8,width:"100%"}} onClick={()=>setConn(null)}>Annuler</button>
+          </div>
+        )}
+        <div className="card" style={{padding:"12px 14px"}}>
+          <div className="card-header" style={{marginBottom:6}}>
+            <span className="card-title" style={{fontSize:12}}>Modeles</span>
+            <a href={"http://"+(typeof window!=="undefined"?window.location.hostname:"localhost")+":5000"} target="_blank" rel="noopener noreferrer"
+              style={{fontSize:10,color:"var(--accent)",textDecoration:"none"}}>MLflow</a>
+          </div>
+          <div style={{display:"flex",flexDirection:"column",gap:4}}>
+            {models.map(m=>(
+              <div key={m.id} style={{background:"var(--bg-input)",borderRadius:6,padding:"6px 8px",fontSize:10}}>
+                <div style={{fontWeight:600}}>{m.name}</div>
+                <div style={{color:"var(--text3)"}}>{m.architecture} \u2014 <span style={{color:"var(--green)"}}>{(m.map50*100).toFixed(1)}%</span></div>
+              </div>
+            ))}
+          </div>
+        </div>
       </div>
     </div>
   );

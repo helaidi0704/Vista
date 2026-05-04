@@ -2,6 +2,7 @@
 VISTA — MinIO / S3 Storage Service
 Handles presigned URLs, uploads, bucket initialization.
 """
+import os
 import boto3
 from botocore.config import Config as BotoConfig
 from botocore.exceptions import ClientError
@@ -19,10 +20,23 @@ BUCKETS = [
 
 
 def get_s3_client():
-    """Create a boto3 S3 client pointing to MinIO."""
+    """Create a boto3 S3 client pointing to MinIO (internal Docker network)."""
     return boto3.client(
         "s3",
-        endpoint_url=f"http{'s' if settings.minio_use_ssl else ''}://{settings.minio_endpoint}",
+        endpoint_url=f"http://{settings.minio_endpoint}",
+        aws_access_key_id=settings.minio_access_key,
+        aws_secret_access_key=settings.minio_secret_key,
+        config=BotoConfig(signature_version="s3v4"),
+        region_name="us-east-1",
+    )
+
+
+def get_public_s3_client():
+    """Create a boto3 S3 client using the external IP for presigned URLs."""
+    external_ip = os.environ.get("EXTERNAL_IP", "localhost")
+    return boto3.client(
+        "s3",
+        endpoint_url=f"http://{external_ip}:9000",
         aws_access_key_id=settings.minio_access_key,
         aws_secret_access_key=settings.minio_secret_key,
         config=BotoConfig(signature_version="s3v4"),
@@ -43,8 +57,8 @@ async def init_buckets():
 
 
 def generate_presigned_url(bucket: str, key: str, expires_in: int = 3600) -> str:
-    """Generate a presigned GET URL for direct browser access."""
-    s3 = get_s3_client()
+    """Generate a presigned GET URL using external IP (for browser access)."""
+    s3 = get_public_s3_client()
     return s3.generate_presigned_url(
         "get_object",
         Params={"Bucket": bucket, "Key": key},
@@ -53,8 +67,8 @@ def generate_presigned_url(bucket: str, key: str, expires_in: int = 3600) -> str
 
 
 def generate_upload_url(bucket: str, key: str, content_type: str = "image/jpeg", expires_in: int = 3600) -> str:
-    """Generate a presigned PUT URL for direct browser upload."""
-    s3 = get_s3_client()
+    """Generate a presigned PUT URL using external IP."""
+    s3 = get_public_s3_client()
     return s3.generate_presigned_url(
         "put_object",
         Params={"Bucket": bucket, "Key": key, "ContentType": content_type},
