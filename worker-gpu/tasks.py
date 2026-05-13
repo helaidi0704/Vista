@@ -738,19 +738,142 @@ def run_inference(self, model_id: str, image_b64: str, return_gradcam: bool = Fa
             "latency_ms": round(latency, 1),
         }
 
-        # ===== REAL V2: REAL GRAD-CAM (optional) =====
-        # V1.0: result["gradcam_url"] = None  ← always None
-        # V2.0: Generates actual heatmap showing which pixels the model focuses on
-        if return_gradcam and detections:
+        # ===== REAL V3: REAL GRAD-CAM =====
+        # V1.0/V2.0: result["gradcam_url"] = None  <- always None, no heatmap
+        # V3.0: Computes REAL gradient-weighted activation map showing
+        #        which pixels the neural network focuses on for its prediction
+        if return_gradcam:
             try:
-                from grad_cam import GradCAM
-                # Get the last conv layer for Grad-CAM
-                target_layer = model.model.model[-2]  # Last feature layer
+                import numpy as np
+                import cv2
+                from pytorch_grad_cam import GradCAM as PytorchGradCAM
+                from pytorch_grad_cam.utils.image import show_cam_on_image
+                from pytorch_grad_cam.utils.model_targets import ClassifierOutputTarget
+                import torch
 
-                # This would generate a real heatmap overlay
-                # For now, we flag it as available
-                result["gradcam_url"] = None
-                result["gradcam_path"] = f"gradcam/{model_id}/{int(time.time())}.png"
+                logger.info("Computing real Grad-CAM heatmap...")
+
+                # ===== REAL V3: Hook into the model backbone =====
+                # V2.0: target_layer = model.model.model[-2] <- never used
+                # V3.0: We access the actual conv layers of YOLOv8 backbone
+                #        The last C2f block before the detection head
+                yolo_model = model.model
+                # YOLOv8 backbone: layers 0-9, neck: 10-21, head: 22
+                # We target the last feature extraction layer before the head
+                target_layers = [yolo_model.model[9]]  # SPPF layer - best for Grad-CAM
+
+                # ===== REAL V3: Prepare image tensor =====
+                # V2.0: image was only used for model.predict()
+                # V3.0: We also feed it through Grad-CAM pipeline
+                img_array = np.array(image)
+                img_resized = cv2.resize(img_array, (640, 640))
+                img_normalized = img_resized.astype(np.float32) / 255.0
+                img_tensor = torch.from_numpy(img_normalized).permute(2, 0, 1).unsqueeze(0)
+
+                if torch.cuda.is_available():
+                    img_tensor = img_tensor.cuda()
+
+                # ===== REAL V3: Compute the actual Grad-CAM heatmap =====
+                # This is the core computation:
+                # 1. Forward pass: feed image through network
+                # 2. Backward pass: compute gradients of prediction w.r.t. target layer
+                # 3. Weight feature maps by gradient importance
+                # 4. Result: heatmap showing where model "looks" most
+                try:
+                    # Use a wrapper that works with YOLOv8's detection output
+                    class YOLOGradCAMTarget:
+                        def __init__(self, cls_idx=0):
+                            self.cls_idx = cls_idx
+                        def __call__(self, output):
+                            if isinstance(output, (list, tuple)):
+                                output = output[0]
+                            if len(output.shape) == 3:
+                                return output[:, 4 + self.cls_idx, :].max(dim=-1).values.sum()
+                            return output.sum()
+
+                    cam = PytorchGradCAM(model=yolo_model, target_layers=target_layers)
+
+                    # Target the most confident detection's class
+                    target_cls = 0
+                    if detections:
+                        # Get class index of highest confidence detection
+                        best_det = max(detections, key=lambda d: d["confidence"])
+                        class_names = list(model.names.values()) if hasattr(model, "names") else []
+                        if best_det["class"] in class_names:
+                            target_cls = class_names.index(best_det["class"])
+
+                    targets = [YOLOGradCAMTarget(cls_idx=target_cls)]
+                    grayscale_cam = cam(input_tensor=img_tensor, targets=targets)
+                    grayscale_cam = grayscale_cam[0, :]  # First image in batch
+
+                except Exception as cam_err:
+                    logger.warning(f"Grad-CAM forward pass failed, using fallback: {cam_err}")
+                    # Fallback: generate activation-based heatmap without gradients
+                    activations = {}
+                    def hook_fn(module, input, output):
+                        activations["feat"] = output.detach()
+                    handle = target_layers[0].register_forward_hook(hook_fn)
+                    with torch.no_grad():
+                        yolo_model(img_tensor)
+                    handle.remove()
+                    feat = activations["feat"]
+                    heatmap = feat.mean(dim=1).squeeze().cpu().numpy()
+                    heatmap = cv2.resize(heatmap, (640, 640))
+                    heatmap = (heatmap - heatmap.min()) / (heatmap.max() - heatmap.min() + 1e-8)
+                    grayscale_cam = heatmap
+
+                # ===== REAL V3: Generate the overlay image =====
+                # V2.0: No overlay was ever generated
+                # V3.0: Blends heatmap (blue->green->yellow->red) with original image
+                cam_image = show_cam_on_image(img_normalized, grayscale_cam, use_rgb=True)
+
+                # Draw detection boxes on the Grad-CAM overlay
+                for det in detections:
+                    x1, y1, x2, y2 = det["bbox"]
+                    # Scale bbox to 640x640
+                    orig_h, orig_w = img_array.shape[:2]
+                    sx, sy = 640 / orig_w, 640 / orig_h
+                    bx1, by1 = int(x1 * sx), int(y1 * sy)
+                    bx2, by2 = int(x2 * sx), int(y2 * sy)
+                    cv2.rectangle(cam_image, (bx1, by1), (bx2, by2), (255, 255, 0), 2)
+                    label = f"{det['class']} {det['confidence']:.0%}"
+                    cv2.putText(cam_image, label, (bx1, by1 - 5),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 0), 1)
+
+                # ===== REAL V3: Save to MinIO and get presigned URL =====
+                # V2.0: result["gradcam_url"] = None  <- always None
+                # V3.0: Saves actual heatmap image, returns viewable URL
+                _, img_encoded = cv2.imencode(".png", cv2.cvtColor(cam_image, cv2.COLOR_RGB2BGR))
+                gradcam_key = f"gradcam/{model_id}/{int(time.time())}.png"
+
+                s3_gc = get_s3()
+                s3_gc.put_object(
+                    Bucket=os.environ.get("MINIO_BUCKET_EXPORTS", "exports"),
+                    Key=gradcam_key,
+                    Body=img_encoded.tobytes(),
+                    ContentType="image/png",
+                )
+
+                # Generate presigned URL for browser access
+                external_ip = os.environ.get("EXTERNAL_IP", "localhost")
+                s3_public = boto3.client(
+                    "s3",
+                    endpoint_url=f"http://{external_ip}:9000",
+                    aws_access_key_id=os.environ.get("MINIO_ACCESS_KEY", "vistaadmin"),
+                    aws_secret_access_key=os.environ.get("MINIO_SECRET_KEY", "vistaSecretKey2024"),
+                    config=BotoConfig(signature_version="s3v4"),
+                    region_name="us-east-1",
+                )
+                gradcam_url = s3_public.generate_presigned_url(
+                    "get_object",
+                    Params={"Bucket": "exports", "Key": gradcam_key},
+                    ExpiresIn=3600,
+                )
+
+                result["gradcam_url"] = gradcam_url
+                result["gradcam_path"] = gradcam_key
+                logger.info(f"Grad-CAM heatmap saved: {gradcam_key}")
+
             except Exception as e:
                 logger.warning(f"Grad-CAM failed: {e}")
                 result["gradcam_url"] = None
