@@ -38,13 +38,15 @@ services:
     ports:
       - "3000:3000"
     environment:
-      NEXT_PUBLIC_API_URL: http://34.91.105.156:8000
+      NEXT_PUBLIC_API_URL: http://34.7.67.161:8000
       NEXT_PUBLIC_WS_URL: ws://34.12.11.69:8000
       NEXT_PUBLIC_MINIO_URL: http://34.12.11.69:9000
     depends_on:
       api:
         condition: service_healthy
     restart: unless-stopped
+    mem_limit: 2g
+    cpus: 1
     healthcheck:
       test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:3000/api/health"]
       interval: 30s
@@ -66,9 +68,11 @@ services:
       <<: *common-env
       CELERY_BROKER_URL: redis://redis:6379/0
       CELERY_RESULT_BACKEND: redis://redis:6379/1
-      EXTERNAL_IP: 34.91.105.156
+      EXTERNAL_IP: 34.7.67.161
     volumes:
       - ./backend/app:/app/app  # Hot-reload in dev
+    mem_limit: 2g
+    cpus: 2
     depends_on:
       db:
         condition: service_healthy
@@ -96,11 +100,12 @@ services:
       <<: *common-env
       CELERY_BROKER_URL: redis://redis:6379/0
       CELERY_RESULT_BACKEND: redis://redis:6379/1
-      EXTERNAL_IP: 34.91.105.156
+      EXTERNAL_IP: 34.7.67.161
       NVIDIA_VISIBLE_DEVICES: all
       CELERY_QUEUE: gpu
       CELERY_CONCURRENCY: 1
       MLFLOW_TRACKING_URI: http://mlflow:5000
+      GIT_PYTHON_REFRESH: quiet
     volumes:
       - model-cache:/app/model-cache
     depends_on:
@@ -111,6 +116,8 @@ services:
       minio:
         condition: service_healthy
     restart: unless-stopped
+    mem_limit: 8g
+    cpus: 4
     # GPU access — uncomment when NVIDIA Docker is available
 #    deploy:
 #      resources:
@@ -132,7 +139,7 @@ services:
       <<: *common-env
       CELERY_BROKER_URL: redis://redis:6379/0
       CELERY_RESULT_BACKEND: redis://redis:6379/1
-      EXTERNAL_IP: 34.91.105.156
+      EXTERNAL_IP: 34.7.67.161
       CELERY_QUEUE: cpu
       CELERY_CONCURRENCY: 4
     depends_on:
@@ -143,6 +150,8 @@ services:
       minio:
         condition: service_healthy
     restart: unless-stopped
+    mem_limit: 4g
+    cpus: 2
 
   # ═══════════════════════════════════════════════════════════════════════════
   # 5. POSTGRESQL 15 — Metadata, annotations, models, jobs
@@ -160,6 +169,8 @@ services:
       - pgdata:/var/lib/postgresql/data
       - ./scripts/init-db.sql:/docker-entrypoint-initdb.d/01-init.sql
     restart: unless-stopped
+    mem_limit: 2g
+    cpus: 1
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U vista -d vista"]
       interval: 5s
@@ -178,6 +189,8 @@ services:
     volumes:
       - redisdata:/data
     restart: unless-stopped
+    mem_limit: 1g
+    cpus: 0.5
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
@@ -200,6 +213,8 @@ services:
     volumes:
       - miniodata:/data
     restart: unless-stopped
+    mem_limit: 2g
+    cpus: 1
     healthcheck:
       test: ["CMD", "mc", "ready", "local"]
       interval: 10s
@@ -228,6 +243,8 @@ services:
       minio:
         condition: service_healthy
     restart: unless-stopped
+    mem_limit: 1g
+    cpus: 0.5
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:5000/health')"]
       interval: 15s

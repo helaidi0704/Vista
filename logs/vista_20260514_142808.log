@@ -1,0 +1,362 @@
+=== VISTA Log Collection — Thu May 14 14:28:08 UTC 2026 ===
+
+═══════════════════════════════════════════
+  vista-db — last 50 lines
+═══════════════════════════════════════════
+2026-05-14T14:08:13.130797263Z 
+2026-05-14T14:08:13.130828931Z PostgreSQL Database directory appears to contain a database; Skipping initialization
+2026-05-14T14:08:13.130833402Z 
+2026-05-14T14:08:13.170986699Z 2026-05-14 14:08:13.170 UTC [1] LOG:  starting PostgreSQL 15.17 on x86_64-pc-linux-musl, compiled by gcc (Alpine 15.2.0) 15.2.0, 64-bit
+2026-05-14T14:08:13.171016732Z 2026-05-14 14:08:13.170 UTC [1] LOG:  listening on IPv4 address "0.0.0.0", port 5432
+2026-05-14T14:08:13.171020578Z 2026-05-14 14:08:13.170 UTC [1] LOG:  listening on IPv6 address "::", port 5432
+2026-05-14T14:08:13.180791881Z 2026-05-14 14:08:13.180 UTC [1] LOG:  listening on Unix socket "/var/run/postgresql/.s.PGSQL.5432"
+2026-05-14T14:08:13.190464872Z 2026-05-14 14:08:13.190 UTC [29] LOG:  database system was shut down at 2026-05-14 14:08:01 UTC
+2026-05-14T14:08:13.200641639Z 2026-05-14 14:08:13.200 UTC [1] LOG:  database system is ready to accept connections
+2026-05-14T14:13:13.215730292Z 2026-05-14 14:13:13.215 UTC [27] LOG:  checkpoint starting: time
+2026-05-14T14:13:13.240109393Z 2026-05-14 14:13:13.239 UTC [27] LOG:  checkpoint complete: wrote 3 buffers (0.0%); 0 WAL file(s) added, 0 removed, 0 recycled; write=0.006 s, sync=0.003 s, total=0.025 s; sync files=2, longest=0.002 s, average=0.002 s; distance=0 kB, estimate=0 kB
+2026-05-14T14:18:13.340363985Z 2026-05-14 14:18:13.340 UTC [27] LOG:  checkpoint starting: time
+2026-05-14T14:18:15.669852132Z 2026-05-14 14:18:15.669 UTC [27] LOG:  checkpoint complete: wrote 23 buffers (0.1%); 0 WAL file(s) added, 0 removed, 0 recycled; write=2.313 s, sync=0.003 s, total=2.330 s; sync files=13, longest=0.002 s, average=0.001 s; distance=13 kB, estimate=13 kB
+2026-05-14T14:22:23.191359067Z 2026-05-14 14:22:23.191 UTC [1] LOG:  received fast shutdown request
+2026-05-14T14:22:23.195936692Z 2026-05-14 14:22:23.195 UTC [1] LOG:  aborting any active transactions
+2026-05-14T14:22:23.196454844Z 2026-05-14 14:22:23.195 UTC [40] FATAL:  terminating connection due to administrator command
+2026-05-14T14:22:23.200539523Z 2026-05-14 14:22:23.200 UTC [1] LOG:  background worker "logical replication launcher" (PID 32) exited with exit code 1
+2026-05-14T14:22:23.202699899Z 2026-05-14 14:22:23.202 UTC [27] LOG:  shutting down
+2026-05-14T14:22:23.207078668Z 2026-05-14 14:22:23.206 UTC [27] LOG:  checkpoint starting: shutdown immediate
+2026-05-14T14:22:23.228674748Z 2026-05-14 14:22:23.228 UTC [27] LOG:  checkpoint complete: wrote 0 buffers (0.0%); 0 WAL file(s) added, 0 removed, 0 recycled; write=0.004 s, sync=0.001 s, total=0.026 s; sync files=0, longest=0.000 s, average=0.000 s; distance=0 kB, estimate=12 kB
+2026-05-14T14:22:23.239038770Z 2026-05-14 14:22:23.238 UTC [1] LOG:  database system is shut down
+2026-05-14T14:22:34.885259011Z 
+2026-05-14T14:22:34.885307931Z PostgreSQL Database directory appears to contain a database; Skipping initialization
+2026-05-14T14:22:34.885344534Z 
+2026-05-14T14:22:34.936166479Z 2026-05-14 14:22:34.935 UTC [1] LOG:  starting PostgreSQL 15.17 on x86_64-pc-linux-musl, compiled by gcc (Alpine 15.2.0) 15.2.0, 64-bit
+2026-05-14T14:22:34.936207239Z 2026-05-14 14:22:34.935 UTC [1] LOG:  listening on IPv4 address "0.0.0.0", port 5432
+2026-05-14T14:22:34.936226714Z 2026-05-14 14:22:34.935 UTC [1] LOG:  listening on IPv6 address "::", port 5432
+2026-05-14T14:22:34.946100721Z 2026-05-14 14:22:34.945 UTC [1] LOG:  listening on Unix socket "/var/run/postgresql/.s.PGSQL.5432"
+2026-05-14T14:22:34.960067102Z 2026-05-14 14:22:34.958 UTC [29] LOG:  database system was shut down at 2026-05-14 14:22:23 UTC
+2026-05-14T14:22:34.972174002Z 2026-05-14 14:22:34.971 UTC [1] LOG:  database system is ready to accept connections
+2026-05-14T14:26:54.824204826Z 2026-05-14 14:26:54.823 UTC [1] LOG:  received fast shutdown request
+2026-05-14T14:26:54.829278778Z 2026-05-14 14:26:54.829 UTC [1] LOG:  aborting any active transactions
+2026-05-14T14:26:54.829594269Z 2026-05-14 14:26:54.829 UTC [40] FATAL:  terminating connection due to administrator command
+2026-05-14T14:26:54.837235148Z 2026-05-14 14:26:54.837 UTC [1] LOG:  background worker "logical replication launcher" (PID 32) exited with exit code 1
+2026-05-14T14:26:54.837662548Z 2026-05-14 14:26:54.837 UTC [27] LOG:  shutting down
+2026-05-14T14:26:54.840354617Z 2026-05-14 14:26:54.840 UTC [27] LOG:  checkpoint starting: shutdown immediate
+2026-05-14T14:26:54.866428444Z 2026-05-14 14:26:54.865 UTC [27] LOG:  checkpoint complete: wrote 3 buffers (0.0%); 0 WAL file(s) added, 0 removed, 0 recycled; write=0.006 s, sync=0.003 s, total=0.028 s; sync files=2, longest=0.002 s, average=0.002 s; distance=0 kB, estimate=0 kB
+2026-05-14T14:26:54.876891928Z 2026-05-14 14:26:54.876 UTC [1] LOG:  database system is shut down
+2026-05-14T14:27:06.403239715Z 
+2026-05-14T14:27:06.403351499Z PostgreSQL Database directory appears to contain a database; Skipping initialization
+2026-05-14T14:27:06.403359708Z 
+2026-05-14T14:27:06.456678820Z 2026-05-14 14:27:06.456 UTC [1] LOG:  starting PostgreSQL 15.17 on x86_64-pc-linux-musl, compiled by gcc (Alpine 15.2.0) 15.2.0, 64-bit
+2026-05-14T14:27:06.456718774Z 2026-05-14 14:27:06.456 UTC [1] LOG:  listening on IPv4 address "0.0.0.0", port 5432
+2026-05-14T14:27:06.456724043Z 2026-05-14 14:27:06.456 UTC [1] LOG:  listening on IPv6 address "::", port 5432
+2026-05-14T14:27:06.464604781Z 2026-05-14 14:27:06.464 UTC [1] LOG:  listening on Unix socket "/var/run/postgresql/.s.PGSQL.5432"
+2026-05-14T14:27:06.475429252Z 2026-05-14 14:27:06.475 UTC [29] LOG:  database system was shut down at 2026-05-14 14:26:54 UTC
+2026-05-14T14:27:06.491756128Z 2026-05-14 14:27:06.489 UTC [1] LOG:  database system is ready to accept connections
+
+═══════════════════════════════════════════
+  vista-redis — last 50 lines
+═══════════════════════════════════════════
+2026-05-14T14:22:34.955138724Z 1:M 14 May 2026 14:22:34.955 * Increased maximum number of open files to 10032 (it was originally set to 1024).
+2026-05-14T14:22:34.957247549Z 1:M 14 May 2026 14:22:34.955 * monotonic clock: POSIX clock_gettime
+2026-05-14T14:22:34.957614205Z 1:M 14 May 2026 14:22:34.957 * Running mode=standalone, port=6379.
+2026-05-14T14:22:34.958196215Z 1:M 14 May 2026 14:22:34.958 * Server initialized
+2026-05-14T14:22:34.959094649Z 1:M 14 May 2026 14:22:34.958 * Reading RDB base file on AOF loading...
+2026-05-14T14:22:34.959121510Z 1:M 14 May 2026 14:22:34.959 * Loading RDB produced by version 7.4.8
+2026-05-14T14:22:34.960038590Z 1:M 14 May 2026 14:22:34.959 * RDB age 1550279 seconds
+2026-05-14T14:22:34.960055967Z 1:M 14 May 2026 14:22:34.959 * RDB memory usage when created 0.90 Mb
+2026-05-14T14:22:34.960074200Z 1:M 14 May 2026 14:22:34.959 * RDB is base AOF
+2026-05-14T14:22:34.960087848Z 1:M 14 May 2026 14:22:34.959 * Done loading RDB, keys loaded: 0, keys expired: 0.
+2026-05-14T14:22:34.960093382Z 1:M 14 May 2026 14:22:34.959 * DB loaded from base file appendonly.aof.1.base.rdb: 0.001 seconds
+2026-05-14T14:22:35.094973707Z 1:M 14 May 2026 14:22:35.094 * DB loaded from incr file appendonly.aof.1.incr.aof: 0.135 seconds
+2026-05-14T14:22:35.095006902Z 1:M 14 May 2026 14:22:35.094 * DB loaded from append only file: 0.137 seconds
+2026-05-14T14:22:35.095086531Z 1:M 14 May 2026 14:22:35.095 * Opening AOF incr file appendonly.aof.1.incr.aof on server start
+2026-05-14T14:22:35.095161603Z 1:M 14 May 2026 14:22:35.095 * Ready to accept connections tcp
+2026-05-14T14:23:35.092603896Z 1:M 14 May 2026 14:23:35.092 * 10000 changes in 60 seconds. Saving...
+2026-05-14T14:23:35.092893315Z 1:M 14 May 2026 14:23:35.092 * Background saving started by pid 87
+2026-05-14T14:23:35.101929872Z 87:C 14 May 2026 14:23:35.101 * DB saved on disk
+2026-05-14T14:23:35.102335186Z 87:C 14 May 2026 14:23:35.102 * Fork CoW for RDB: current 0 MB, peak 0 MB, average 0 MB
+2026-05-14T14:23:35.193784182Z 1:M 14 May 2026 14:23:35.193 * Background saving terminated with success
+2026-05-14T14:26:54.820429037Z 1:signal-handler (1778768814) Received SIGTERM scheduling shutdown...
+2026-05-14T14:26:54.832450215Z 1:M 14 May 2026 14:26:54.832 * User requested shutdown...
+2026-05-14T14:26:54.832474219Z 1:M 14 May 2026 14:26:54.832 * Calling fsync() on the AOF file.
+2026-05-14T14:26:54.833742321Z 1:M 14 May 2026 14:26:54.832 * Saving the final RDB snapshot before exiting.
+2026-05-14T14:26:54.840363677Z 1:M 14 May 2026 14:26:54.840 * DB saved on disk
+2026-05-14T14:26:54.840385703Z 1:M 14 May 2026 14:26:54.840 # Redis is now ready to exit, bye bye...
+2026-05-14T14:27:06.579513766Z 1:C 14 May 2026 14:27:06.576 # WARNING Memory overcommit must be enabled! Without it, a background save or replication may fail under low memory condition. Being disabled, it can also cause failures without low memory condition, see https://github.com/jemalloc/jemalloc/issues/1328. To fix this issue add 'vm.overcommit_memory = 1' to /etc/sysctl.conf and then reboot or run the command 'sysctl vm.overcommit_memory=1' for this to take effect.
+2026-05-14T14:27:06.579558995Z 1:C 14 May 2026 14:27:06.576 * oO0OoO0OoO0Oo Redis is starting oO0OoO0OoO0Oo
+2026-05-14T14:27:06.579566471Z 1:C 14 May 2026 14:27:06.576 * Redis version=7.4.8, bits=64, commit=00000000, modified=0, pid=1, just started
+2026-05-14T14:27:06.579572491Z 1:C 14 May 2026 14:27:06.576 * Configuration loaded
+2026-05-14T14:27:06.579578083Z 1:M 14 May 2026 14:27:06.577 * Increased maximum number of open files to 10032 (it was originally set to 1024).
+2026-05-14T14:27:06.579584621Z 1:M 14 May 2026 14:27:06.577 * monotonic clock: POSIX clock_gettime
+2026-05-14T14:27:06.579602351Z 1:M 14 May 2026 14:27:06.579 * Running mode=standalone, port=6379.
+2026-05-14T14:27:06.580185458Z 1:M 14 May 2026 14:27:06.580 * Server initialized
+2026-05-14T14:27:06.581021921Z 1:M 14 May 2026 14:27:06.580 * Reading RDB base file on AOF loading...
+2026-05-14T14:27:06.581042777Z 1:M 14 May 2026 14:27:06.580 * Loading RDB produced by version 7.4.8
+2026-05-14T14:27:06.581049397Z 1:M 14 May 2026 14:27:06.580 * RDB age 1550551 seconds
+2026-05-14T14:27:06.581054992Z 1:M 14 May 2026 14:27:06.580 * RDB memory usage when created 0.90 Mb
+2026-05-14T14:27:06.581061520Z 1:M 14 May 2026 14:27:06.580 * RDB is base AOF
+2026-05-14T14:27:06.581076382Z 1:M 14 May 2026 14:27:06.580 * Done loading RDB, keys loaded: 0, keys expired: 0.
+2026-05-14T14:27:06.581082229Z 1:M 14 May 2026 14:27:06.580 * DB loaded from base file appendonly.aof.1.base.rdb: 0.000 seconds
+2026-05-14T14:27:06.717588246Z 1:M 14 May 2026 14:27:06.713 * DB loaded from incr file appendonly.aof.1.incr.aof: 0.133 seconds
+2026-05-14T14:27:06.717616308Z 1:M 14 May 2026 14:27:06.713 * DB loaded from append only file: 0.133 seconds
+2026-05-14T14:27:06.717622947Z 1:M 14 May 2026 14:27:06.713 * Opening AOF incr file appendonly.aof.1.incr.aof on server start
+2026-05-14T14:27:06.717628949Z 1:M 14 May 2026 14:27:06.713 * Ready to accept connections tcp
+2026-05-14T14:28:07.043022998Z 1:M 14 May 2026 14:28:07.042 * 10000 changes in 60 seconds. Saving...
+2026-05-14T14:28:07.043076153Z 1:M 14 May 2026 14:28:07.042 * Background saving started by pid 87
+2026-05-14T14:28:07.051880683Z 87:C 14 May 2026 14:28:07.051 * DB saved on disk
+2026-05-14T14:28:07.052441881Z 87:C 14 May 2026 14:28:07.052 * Fork CoW for RDB: current 0 MB, peak 0 MB, average 0 MB
+2026-05-14T14:28:07.143944041Z 1:M 14 May 2026 14:28:07.143 * Background saving terminated with success
+
+═══════════════════════════════════════════
+  vista-minio — last 50 lines
+═══════════════════════════════════════════
+2026-05-14T14:08:13.741338322Z MinIO Object Storage Server
+2026-05-14T14:08:13.741398905Z Copyright: 2015-2026 MinIO, Inc.
+2026-05-14T14:08:13.741404281Z License: GNU AGPLv3 - https://www.gnu.org/licenses/agpl-3.0.html
+2026-05-14T14:08:13.741408166Z Version: RELEASE.2025-09-07T16-13-09Z (go1.24.6 linux/amd64)
+2026-05-14T14:08:13.741411825Z 
+2026-05-14T14:08:13.741415268Z API: http://172.18.0.5:9000  http://127.0.0.1:9000 
+2026-05-14T14:08:13.741418985Z WebUI: http://172.18.0.5:9001 http://127.0.0.1:9001  
+2026-05-14T14:08:13.741422692Z 
+2026-05-14T14:08:13.741426461Z Docs: https://docs.min.io
+2026-05-14T14:22:23.198171144Z INFO: Exiting on signal: TERMINATED
+2026-05-14T14:22:35.477446746Z MinIO Object Storage Server
+2026-05-14T14:22:35.477593948Z Copyright: 2015-2026 MinIO, Inc.
+2026-05-14T14:22:35.477601908Z License: GNU AGPLv3 - https://www.gnu.org/licenses/agpl-3.0.html
+2026-05-14T14:22:35.477607426Z Version: RELEASE.2025-09-07T16-13-09Z (go1.24.6 linux/amd64)
+2026-05-14T14:22:35.477613270Z 
+2026-05-14T14:22:35.477624913Z API: http://172.18.0.2:9000  http://127.0.0.1:9000 
+2026-05-14T14:22:35.477630755Z WebUI: http://172.18.0.2:9001 http://127.0.0.1:9001  
+2026-05-14T14:22:35.477664956Z 
+2026-05-14T14:22:35.477670272Z Docs: https://docs.min.io
+2026-05-14T14:26:54.824564857Z INFO: Exiting on signal: TERMINATED
+2026-05-14T14:27:07.233411248Z MinIO Object Storage Server
+2026-05-14T14:27:07.233450770Z Copyright: 2015-2026 MinIO, Inc.
+2026-05-14T14:27:07.233458561Z License: GNU AGPLv3 - https://www.gnu.org/licenses/agpl-3.0.html
+2026-05-14T14:27:07.233464833Z Version: RELEASE.2025-09-07T16-13-09Z (go1.24.6 linux/amd64)
+2026-05-14T14:27:07.233471001Z 
+2026-05-14T14:27:07.233476863Z API: http://172.18.0.7:9000  http://127.0.0.1:9000 
+2026-05-14T14:27:07.233482784Z WebUI: http://172.18.0.7:9001 http://127.0.0.1:9001  
+2026-05-14T14:27:07.233489103Z 
+2026-05-14T14:27:07.233495121Z Docs: https://docs.min.io
+
+═══════════════════════════════════════════
+  vista-api — last 50 lines
+═══════════════════════════════════════════
+2026-05-14T14:27:08.243465604Z INFO:     Application startup complete.
+2026-05-14T14:27:08.244198658Z INFO:     Uvicorn running on http://0.0.0.0:8000 (Press CTRL+C to quit)
+2026-05-14T14:27:11.590484974Z 2026-05-14 14:27:11,590 INFO sqlalchemy.engine.Engine select pg_catalog.version()
+2026-05-14T14:27:11.590563182Z 2026-05-14 14:27:11,590 INFO sqlalchemy.engine.Engine [raw sql] ()
+2026-05-14T14:27:11.590491290Z INFO:sqlalchemy.engine.Engine:select pg_catalog.version()
+2026-05-14T14:27:11.590583784Z INFO:sqlalchemy.engine.Engine:[raw sql] ()
+2026-05-14T14:27:11.592421047Z 2026-05-14 14:27:11,592 INFO sqlalchemy.engine.Engine select current_schema()
+2026-05-14T14:27:11.592461326Z INFO:sqlalchemy.engine.Engine:select current_schema()
+2026-05-14T14:27:11.592525479Z 2026-05-14 14:27:11,592 INFO sqlalchemy.engine.Engine [raw sql] ()
+2026-05-14T14:27:11.592561935Z INFO:sqlalchemy.engine.Engine:[raw sql] ()
+2026-05-14T14:27:11.594004394Z INFO:sqlalchemy.engine.Engine:show standard_conforming_strings
+2026-05-14T14:27:11.594030582Z 2026-05-14 14:27:11,593 INFO sqlalchemy.engine.Engine show standard_conforming_strings
+2026-05-14T14:27:11.594036047Z 2026-05-14 14:27:11,593 INFO sqlalchemy.engine.Engine [raw sql] ()
+2026-05-14T14:27:11.594073866Z INFO:sqlalchemy.engine.Engine:[raw sql] ()
+2026-05-14T14:27:11.595719967Z INFO:sqlalchemy.engine.Engine:BEGIN (implicit)
+2026-05-14T14:27:11.595756466Z 2026-05-14 14:27:11,595 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-05-14T14:27:11.595841757Z INFO:sqlalchemy.engine.Engine:SELECT 1
+2026-05-14T14:27:11.595876511Z 2026-05-14 14:27:11,595 INFO sqlalchemy.engine.Engine SELECT 1
+2026-05-14T14:27:11.596126085Z 2026-05-14 14:27:11,595 INFO sqlalchemy.engine.Engine [generated in 0.00032s] ()
+2026-05-14T14:27:11.596156822Z INFO:sqlalchemy.engine.Engine:[generated in 0.00032s] ()
+2026-05-14T14:27:11.597116079Z 2026-05-14 14:27:11,596 INFO sqlalchemy.engine.Engine ROLLBACK
+2026-05-14T14:27:11.597124325Z INFO:sqlalchemy.engine.Engine:ROLLBACK
+2026-05-14T14:27:11.649526135Z INFO:     127.0.0.1:50944 - "GET /health HTTP/1.1" 200 OK
+2026-05-14T14:27:26.783674645Z INFO:sqlalchemy.engine.Engine:BEGIN (implicit)
+2026-05-14T14:27:26.783730866Z INFO:sqlalchemy.engine.Engine:SELECT 1
+2026-05-14T14:27:26.783680659Z 2026-05-14 14:27:26,783 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-05-14T14:27:26.783773519Z 2026-05-14 14:27:26,783 INFO sqlalchemy.engine.Engine SELECT 1
+2026-05-14T14:27:26.783792735Z INFO:sqlalchemy.engine.Engine:[cached since 15.19s ago] ()
+2026-05-14T14:27:26.783803860Z 2026-05-14 14:27:26,783 INFO sqlalchemy.engine.Engine [cached since 15.19s ago] ()
+2026-05-14T14:27:26.784566911Z 2026-05-14 14:27:26,784 INFO sqlalchemy.engine.Engine ROLLBACK
+2026-05-14T14:27:26.784571213Z INFO:sqlalchemy.engine.Engine:ROLLBACK
+2026-05-14T14:27:26.797825811Z INFO:     127.0.0.1:54496 - "GET /health HTTP/1.1" 200 OK
+2026-05-14T14:27:41.927053453Z 2026-05-14 14:27:41,926 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-05-14T14:27:41.927109554Z 2026-05-14 14:27:41,926 INFO sqlalchemy.engine.Engine SELECT 1
+2026-05-14T14:27:41.927068533Z INFO:sqlalchemy.engine.Engine:BEGIN (implicit)
+2026-05-14T14:27:41.927139039Z INFO:sqlalchemy.engine.Engine:SELECT 1
+2026-05-14T14:27:41.927184108Z 2026-05-14 14:27:41,927 INFO sqlalchemy.engine.Engine [cached since 30.33s ago] ()
+2026-05-14T14:27:41.927190237Z INFO:sqlalchemy.engine.Engine:[cached since 30.33s ago] ()
+2026-05-14T14:27:41.927977019Z 2026-05-14 14:27:41,927 INFO sqlalchemy.engine.Engine ROLLBACK
+2026-05-14T14:27:41.928000163Z INFO:sqlalchemy.engine.Engine:ROLLBACK
+2026-05-14T14:27:41.941241606Z INFO:     127.0.0.1:51372 - "GET /health HTTP/1.1" 200 OK
+2026-05-14T14:27:57.079341977Z 2026-05-14 14:27:57,078 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-05-14T14:27:57.079364332Z INFO:sqlalchemy.engine.Engine:BEGIN (implicit)
+2026-05-14T14:27:57.079376595Z 2026-05-14 14:27:57,079 INFO sqlalchemy.engine.Engine SELECT 1
+2026-05-14T14:27:57.079385720Z INFO:sqlalchemy.engine.Engine:SELECT 1
+2026-05-14T14:27:57.079390516Z 2026-05-14 14:27:57,079 INFO sqlalchemy.engine.Engine [cached since 45.48s ago] ()
+2026-05-14T14:27:57.079393218Z INFO:sqlalchemy.engine.Engine:[cached since 45.48s ago] ()
+2026-05-14T14:27:57.080135132Z INFO:sqlalchemy.engine.Engine:ROLLBACK
+2026-05-14T14:27:57.080182417Z 2026-05-14 14:27:57,079 INFO sqlalchemy.engine.Engine ROLLBACK
+2026-05-14T14:27:57.174292638Z INFO:     127.0.0.1:38630 - "GET /health HTTP/1.1" 200 OK
+
+═══════════════════════════════════════════
+  vista-worker-gpu — last 50 lines
+═══════════════════════════════════════════
+2026-05-14T14:22:36.764654492Z [2026-05-14 14:22:36,764: INFO/MainProcess] mingle: all alone
+2026-05-14T14:22:36.777939631Z [2026-05-14 14:22:36,777: INFO/MainProcess] gpu-worker@a3daaca34c4b ready.
+2026-05-14T14:26:54.822593061Z 
+2026-05-14T14:26:54.822621905Z worker: Warm shutdown (MainProcess)
+2026-05-14T14:27:07.197830067Z /opt/conda/lib/python3.10/site-packages/celery/platforms.py:829: SecurityWarning: You're running the worker with superuser privileges: this is
+2026-05-14T14:27:07.197870904Z absolutely not recommended!
+2026-05-14T14:27:07.197877540Z 
+2026-05-14T14:27:07.197883933Z Please specify a different user using the --uid option.
+2026-05-14T14:27:07.197889632Z 
+2026-05-14T14:27:07.197895663Z User information: uid=0 euid=0 gid=0 egid=0
+2026-05-14T14:27:07.197901737Z 
+2026-05-14T14:27:07.197907777Z   warnings.warn(SecurityWarning(ROOT_DISCOURAGED.format(
+2026-05-14T14:27:07.264238279Z  
+2026-05-14T14:27:07.264288366Z  -------------- gpu-worker@a3daaca34c4b v5.4.0 (opalescent)
+2026-05-14T14:27:07.264293833Z --- ***** ----- 
+2026-05-14T14:27:07.264298789Z -- ******* ---- Linux-6.8.0-1054-gcp-x86_64-with-glibc2.35 2026-05-14 14:27:07
+2026-05-14T14:27:07.264303245Z - *** --- * --- 
+2026-05-14T14:27:07.264307879Z - ** ---------- [config]
+2026-05-14T14:27:07.264342824Z - ** ---------- .> app:         tasks:0x6ffc2874c400
+2026-05-14T14:27:07.264351445Z - ** ---------- .> transport:   redis://redis:6379/0
+2026-05-14T14:27:07.264356585Z - ** ---------- .> results:     redis://redis:6379/1
+2026-05-14T14:27:07.264361109Z - *** --- * --- .> concurrency: 1 (solo)
+2026-05-14T14:27:07.264365890Z -- ******* ---- .> task events: OFF (enable -E to monitor tasks in this worker)
+2026-05-14T14:27:07.264370499Z --- ***** ----- 
+2026-05-14T14:27:07.264374715Z  -------------- [queues]
+2026-05-14T14:27:07.264379090Z                 .> gpu              exchange=gpu(direct) key=gpu
+2026-05-14T14:27:07.264383857Z                 
+2026-05-14T14:27:07.264387911Z 
+2026-05-14T14:27:07.264392443Z [tasks]
+2026-05-14T14:27:07.264397349Z   . tasks.compute_gradcam
+2026-05-14T14:27:07.264401750Z   . tasks.export_model
+2026-05-14T14:27:07.264406205Z   . tasks.run_inference
+2026-05-14T14:27:07.264410748Z   . tasks.train_model
+2026-05-14T14:27:07.264415085Z 
+2026-05-14T14:27:07.265297023Z [2026-05-14 14:27:07,264: WARNING/MainProcess] /opt/conda/lib/python3.10/site-packages/celery/worker/consumer/consumer.py:508: CPendingDeprecationWarning: The broker_connection_retry configuration setting will no longer determine
+2026-05-14T14:27:07.265347358Z whether broker connection retries are made during startup in Celery 6.0 and above.
+2026-05-14T14:27:07.265352615Z If you wish to retain the existing behavior for retrying connections on startup,
+2026-05-14T14:27:07.265356715Z you should set broker_connection_retry_on_startup to True.
+2026-05-14T14:27:07.265360782Z   warnings.warn(
+2026-05-14T14:27:07.265364558Z 
+2026-05-14T14:27:07.272650720Z [2026-05-14 14:27:07,272: INFO/MainProcess] Connected to redis://redis:6379/0
+2026-05-14T14:27:07.273138518Z [2026-05-14 14:27:07,272: WARNING/MainProcess] /opt/conda/lib/python3.10/site-packages/celery/worker/consumer/consumer.py:508: CPendingDeprecationWarning: The broker_connection_retry configuration setting will no longer determine
+2026-05-14T14:27:07.273150452Z whether broker connection retries are made during startup in Celery 6.0 and above.
+2026-05-14T14:27:07.273153753Z If you wish to retain the existing behavior for retrying connections on startup,
+2026-05-14T14:27:07.273157365Z you should set broker_connection_retry_on_startup to True.
+2026-05-14T14:27:07.273160103Z   warnings.warn(
+2026-05-14T14:27:07.273175954Z 
+2026-05-14T14:27:07.276608824Z [2026-05-14 14:27:07,276: INFO/MainProcess] mingle: searching for neighbors
+2026-05-14T14:27:08.296592789Z [2026-05-14 14:27:08,296: INFO/MainProcess] mingle: all alone
+2026-05-14T14:27:08.311277132Z [2026-05-14 14:27:08,311: INFO/MainProcess] gpu-worker@a3daaca34c4b ready.
+
+═══════════════════════════════════════════
+  vista-worker-cpu — last 50 lines
+═══════════════════════════════════════════
+2026-05-14T14:27:07.039293932Z absolutely not recommended!
+2026-05-14T14:27:07.039316001Z 
+2026-05-14T14:27:07.039323909Z Please specify a different user using the --uid option.
+2026-05-14T14:27:07.039330546Z 
+2026-05-14T14:27:07.039336013Z User information: uid=0 euid=0 gid=0 egid=0
+2026-05-14T14:27:07.039341541Z 
+2026-05-14T14:27:07.039346866Z   warnings.warn(SecurityWarning(ROOT_DISCOURAGED.format(
+2026-05-14T14:27:07.116520515Z  
+2026-05-14T14:27:07.116757667Z  -------------- cpu-worker@e50f23c6f9d8 v5.4.0 (opalescent)
+2026-05-14T14:27:07.116768064Z --- ***** ----- 
+2026-05-14T14:27:07.116773767Z -- ******* ---- Linux-6.8.0-1054-gcp-x86_64-with-glibc2.41 2026-05-14 14:27:07
+2026-05-14T14:27:07.116779467Z - *** --- * --- 
+2026-05-14T14:27:07.116785353Z - ** ---------- [config]
+2026-05-14T14:27:07.116791285Z - ** ---------- .> app:         tasks:0x771d49a0d410
+2026-05-14T14:27:07.116797889Z - ** ---------- .> transport:   redis://redis:6379/0
+2026-05-14T14:27:07.116803901Z - ** ---------- .> results:     redis://redis:6379/1
+2026-05-14T14:27:07.116809961Z - *** --- * --- .> concurrency: 4 (prefork)
+2026-05-14T14:27:07.116815937Z -- ******* ---- .> task events: OFF (enable -E to monitor tasks in this worker)
+2026-05-14T14:27:07.116822039Z --- ***** ----- 
+2026-05-14T14:27:07.116827873Z  -------------- [queues]
+2026-05-14T14:27:07.116833610Z                 .> cpu              exchange=cpu(direct) key=cpu
+2026-05-14T14:27:07.116839542Z                 
+2026-05-14T14:27:07.116845184Z 
+2026-05-14T14:27:07.116850590Z [tasks]
+2026-05-14T14:27:07.116856182Z   . tasks.apply_filter
+2026-05-14T14:27:07.116861852Z   . tasks.compute_diff
+2026-05-14T14:27:07.116867304Z   . tasks.compute_fft
+2026-05-14T14:27:07.116872916Z   . tasks.create_dataset_snapshot
+2026-05-14T14:27:07.116878396Z   . tasks.export_annotations
+2026-05-14T14:27:07.116884263Z   . tasks.generate_thumbnail
+2026-05-14T14:27:07.116890368Z   . tasks.list_dataset_versions
+2026-05-14T14:27:07.116896262Z   . tasks.preview_augmentation
+2026-05-14T14:27:07.116901937Z   . tasks.run_drift_analysis
+2026-05-14T14:27:07.116907656Z 
+2026-05-14T14:27:07.319871829Z [2026-05-14 14:27:07,319: WARNING/MainProcess] /usr/local/lib/python3.11/site-packages/celery/worker/consumer/consumer.py:508: CPendingDeprecationWarning: The broker_connection_retry configuration setting will no longer determine
+2026-05-14T14:27:07.319925430Z whether broker connection retries are made during startup in Celery 6.0 and above.
+2026-05-14T14:27:07.319932200Z If you wish to retain the existing behavior for retrying connections on startup,
+2026-05-14T14:27:07.319937447Z you should set broker_connection_retry_on_startup to True.
+2026-05-14T14:27:07.319941962Z   warnings.warn(
+2026-05-14T14:27:07.319946292Z 
+2026-05-14T14:27:07.335454960Z [2026-05-14 14:27:07,334: INFO/MainProcess] Connected to redis://redis:6379/0
+2026-05-14T14:27:07.336166508Z [2026-05-14 14:27:07,335: WARNING/MainProcess] /usr/local/lib/python3.11/site-packages/celery/worker/consumer/consumer.py:508: CPendingDeprecationWarning: The broker_connection_retry configuration setting will no longer determine
+2026-05-14T14:27:07.336183233Z whether broker connection retries are made during startup in Celery 6.0 and above.
+2026-05-14T14:27:07.336188327Z If you wish to retain the existing behavior for retrying connections on startup,
+2026-05-14T14:27:07.336192888Z you should set broker_connection_retry_on_startup to True.
+2026-05-14T14:27:07.336197365Z   warnings.warn(
+2026-05-14T14:27:07.336201317Z 
+2026-05-14T14:27:07.339099781Z [2026-05-14 14:27:07,338: INFO/MainProcess] mingle: searching for neighbors
+2026-05-14T14:27:08.349943516Z [2026-05-14 14:27:08,349: INFO/MainProcess] mingle: all alone
+2026-05-14T14:27:08.362697180Z [2026-05-14 14:27:08,362: INFO/MainProcess] cpu-worker@e50f23c6f9d8 ready.
+
+═══════════════════════════════════════════
+  vista-mlflow — last 50 lines
+═══════════════════════════════════════════
+2026-05-14T14:08:27.411496315Z [2026-05-14 14:08:27 +0000] [16] [INFO] Starting gunicorn 22.0.0
+2026-05-14T14:08:27.411926800Z [2026-05-14 14:08:27 +0000] [16] [INFO] Listening at: http://0.0.0.0:5000 (16)
+2026-05-14T14:08:27.411942677Z [2026-05-14 14:08:27 +0000] [16] [INFO] Using worker: sync
+2026-05-14T14:08:27.418574722Z [2026-05-14 14:08:27 +0000] [17] [INFO] Booting worker with pid: 17
+2026-05-14T14:08:27.507870549Z [2026-05-14 14:08:27 +0000] [18] [INFO] Booting worker with pid: 18
+2026-05-14T14:08:27.522870423Z [2026-05-14 14:08:27 +0000] [19] [INFO] Booting worker with pid: 19
+2026-05-14T14:08:27.608286690Z [2026-05-14 14:08:27 +0000] [20] [INFO] Booting worker with pid: 20
+2026-05-14T14:22:37.999930158Z [2026-05-14 14:22:37 +0000] [16] [INFO] Starting gunicorn 22.0.0
+2026-05-14T14:22:38.000124582Z [2026-05-14 14:22:37 +0000] [16] [INFO] Listening at: http://0.0.0.0:5000 (16)
+2026-05-14T14:22:38.000142796Z [2026-05-14 14:22:38 +0000] [16] [INFO] Using worker: sync
+2026-05-14T14:22:38.003532255Z [2026-05-14 14:22:38 +0000] [17] [INFO] Booting worker with pid: 17
+2026-05-14T14:22:38.068506147Z [2026-05-14 14:22:38 +0000] [18] [INFO] Booting worker with pid: 18
+2026-05-14T14:22:38.168930615Z [2026-05-14 14:22:38 +0000] [19] [INFO] Booting worker with pid: 19
+2026-05-14T14:22:38.271647833Z [2026-05-14 14:22:38 +0000] [20] [INFO] Booting worker with pid: 20
+2026-05-14T14:27:09.445875571Z [2026-05-14 14:27:09 +0000] [16] [INFO] Starting gunicorn 22.0.0
+2026-05-14T14:27:09.446270795Z [2026-05-14 14:27:09 +0000] [16] [INFO] Listening at: http://0.0.0.0:5000 (16)
+2026-05-14T14:27:09.446328565Z [2026-05-14 14:27:09 +0000] [16] [INFO] Using worker: sync
+2026-05-14T14:27:09.449795127Z [2026-05-14 14:27:09 +0000] [17] [INFO] Booting worker with pid: 17
+2026-05-14T14:27:09.550387621Z [2026-05-14 14:27:09 +0000] [18] [INFO] Booting worker with pid: 18
+2026-05-14T14:27:09.608245576Z [2026-05-14 14:27:09 +0000] [19] [INFO] Booting worker with pid: 19
+2026-05-14T14:27:09.707000332Z [2026-05-14 14:27:09 +0000] [20] [INFO] Booting worker with pid: 20
+
+═══════════════════════════════════════════
+  vista-ui — last 50 lines
+═══════════════════════════════════════════
+2026-05-14T14:08:26.417591987Z   ▲ Next.js 14.2.4
+2026-05-14T14:08:26.418048123Z   - Local:        http://localhost:3000
+2026-05-14T14:08:26.418060382Z   - Network:      http://0.0.0.0:3000
+2026-05-14T14:08:26.418270239Z 
+2026-05-14T14:08:26.418441824Z  ✓ Starting...
+2026-05-14T14:08:26.588871094Z Attention: Next.js now collects completely anonymous telemetry regarding usage.
+2026-05-14T14:08:26.588911127Z This information is used to shape Next.js' roadmap and prioritize features.
+2026-05-14T14:08:26.588917195Z You can learn more, including how to opt-out if you'd not like to participate in this anonymous program, by visiting the following URL:
+2026-05-14T14:08:26.589195432Z https://nextjs.org/telemetry
+2026-05-14T14:08:26.589267227Z 
+2026-05-14T14:08:28.988916423Z  ✓ Ready in 2.8s
+2026-05-14T14:22:23.224089079Z [?25h
+2026-05-14T14:22:23.243700520Z npm notice
+2026-05-14T14:22:23.243722637Z npm notice New major version of npm available! 10.8.2 -> 11.14.1
+2026-05-14T14:22:23.243729724Z npm notice Changelog: https://github.com/npm/cli/releases/tag/v11.14.1
+2026-05-14T14:22:23.243735865Z npm notice To update run: npm install -g npm@11.14.1
+2026-05-14T14:22:23.243742120Z npm notice
+2026-05-14T14:22:37.135221800Z   ▲ Next.js 14.2.4
+2026-05-14T14:22:37.135519313Z   - Local:        http://localhost:3000
+2026-05-14T14:22:37.135535938Z   - Network:      http://0.0.0.0:3000
+2026-05-14T14:22:37.135637018Z 
+2026-05-14T14:22:37.135656355Z  ✓ Starting...
+2026-05-14T14:22:39.828427473Z  ✓ Ready in 2.9s
+2026-05-14T14:26:54.845729100Z [?25h
+2026-05-14T14:27:08.529525782Z   ▲ Next.js 14.2.4
+2026-05-14T14:27:08.529910951Z   - Local:        http://localhost:3000
+2026-05-14T14:27:08.529928282Z   - Network:      http://0.0.0.0:3000
+2026-05-14T14:27:08.530089498Z 
+2026-05-14T14:27:08.530228514Z  ✓ Starting...
+2026-05-14T14:27:11.242096235Z  ✓ Ready in 2.9s
+2026-05-14T14:27:43.877853518Z  ○ Compiling / ...
+2026-05-14T14:27:56.834173629Z  ✓ Compiled / in 13.5s (775 modules)
