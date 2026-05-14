@@ -10,7 +10,8 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.core.config import get_settings
 from app.core.storage import init_buckets
-from app.api.v1.routes import router as v1_router
+from app.api.v1.routes import router
+from app.api.v1.auth_routes import router as auth_router
 from app.schemas import HealthResponse
 
 logging.basicConfig(level=logging.INFO)
@@ -51,7 +52,8 @@ app.add_middleware(
 )
 
 # ─── Routes ───────────────────────────────────────────────────────────────────
-app.include_router(v1_router)
+app.include_router(router)
+app.include_router(auth_router)
 
 
 # ─── Health Check ─────────────────────────────────────────────────────────────
