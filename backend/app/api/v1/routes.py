@@ -14,6 +14,7 @@ from app.core.database import get_db
 from app.core.storage import get_s3_client, generate_presigned_url
 from app.core.config import get_settings
 from app.core.celery_app import celery_app
+from app.core.auth import get_current_user, require_auth
 from app.models import Dataset, Image, Annotation, TrainingJob, MLModel, InferenceLog, Deployment
 from app.schemas import (
     DatasetCreate, DatasetOut,
@@ -36,17 +37,24 @@ router = APIRouter(prefix="/api/v1", tags=["VISTA API v1"])
 # ═══════════════════════════════════════════════════════════════════════════════
 
 @router.get("/datasets", response_model=list[DatasetOut])
-async def list_datasets(db: AsyncSession = Depends(get_db)):
-    result = await db.execute(select(Dataset).order_by(Dataset.created_at.desc()))
+async def list_datasets(db: AsyncSession = Depends(get_db), user=Depends(get_current_user)):
+    # ===== ISOLATION: Only show datasets belonging to the user's organization =====
+    query = select(Dataset).order_by(Dataset.created_at.desc())
+    if user and user.get("organization_id"):
+        query = query.where(Dataset.organization_id == user["organization_id"])
+    result = await db.execute(query)
     return result.scalars().all()
 
 
 @router.post("/datasets", response_model=DatasetOut, status_code=201)
-async def create_dataset(payload: DatasetCreate, db: AsyncSession = Depends(get_db)):
+async def create_dataset(payload: DatasetCreate, db: AsyncSession = Depends(get_db), user=Depends(get_current_user)):
+    # ===== ISOLATION: Assign dataset to user's organization =====
+    org_id = user["organization_id"] if user and user.get("organization_id") else None
     dataset = Dataset(
         name=payload.name,
         description=payload.description,
         defect_classes=payload.defect_classes,
+        organization_id=org_id,
     )
     db.add(dataset)
     await db.flush()
@@ -237,8 +245,12 @@ async def create_training_job(
 async def list_training_jobs(
     status: Optional[str] = None,
     db: AsyncSession = Depends(get_db),
+    user=Depends(get_current_user),
 ):
+    # ===== ISOLATION: Only show training jobs from user's organization =====
     query = select(TrainingJob).order_by(TrainingJob.created_at.desc())
+    if user and user.get("organization_id"):
+        query = query.where(TrainingJob.organization_id == user["organization_id"])
     if status:
         query = query.where(TrainingJob.status == status)
     result = await db.execute(query)
@@ -259,8 +271,12 @@ async def get_training_job(job_id: UUID, db: AsyncSession = Depends(get_db)):
 # ═══════════════════════════════════════════════════════════════════════════════
 
 @router.get("/models", response_model=list[MLModelOut])
-async def list_models(db: AsyncSession = Depends(get_db)):
-    result = await db.execute(select(MLModel).order_by(MLModel.created_at.desc()))
+async def list_models(db: AsyncSession = Depends(get_db), user=Depends(get_current_user)):
+    # ===== ISOLATION: Only show models from user's organization =====
+    query = select(MLModel).order_by(MLModel.created_at.desc())
+    if user and user.get("organization_id"):
+        query = query.where(MLModel.organization_id == user["organization_id"])
+    result = await db.execute(query)
     return result.scalars().all()
 
 
@@ -283,6 +299,7 @@ async def run_inference(
     image: UploadFile = File(...),
     return_gradcam: bool = False,
     db: AsyncSession = Depends(get_db),
+    user=Depends(get_current_user),
 ):
     """
     SEQ 3 — Steps 1.3→3.5
