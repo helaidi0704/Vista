@@ -1,0 +1,53 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ui
+  namespace: vista
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: ui
+  template:
+    metadata:
+      labels:
+        app: ui
+    spec:
+      containers:
+      - name: ui
+        image: europe-west4-docker.pkg.dev/ai-use-cases-486914/vista-repo/vista-ui:v4
+        ports:
+        - containerPort: 3000
+        env:
+        - name: NEXT_PUBLIC_API_URL
+          value: "http://34.90.176.2"
+        resources:
+          limits:
+            memory: "2Gi"
+            cpu: "1000m"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ui-lb
+  namespace: vista
+spec:
+  type: LoadBalancer
+  selector:
+    app: ui
+  ports:
+  - port: 80
+    targetPort: 3000
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: api-lb
+  namespace: vista
+spec:
+  type: LoadBalancer
+  selector:
+    app: api
+  ports:
+  - port: 80
+    targetPort: 8000

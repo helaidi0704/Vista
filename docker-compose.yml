@@ -38,7 +38,7 @@ services:
     ports:
       - "3000:3000"
     environment:
-      NEXT_PUBLIC_API_URL: http://34.178.152.253:8000
+      NEXT_PUBLIC_API_URL: http://34.90.176.2
       NEXT_PUBLIC_WS_URL: ws://34.12.11.69:8000
       NEXT_PUBLIC_MINIO_URL: http://34.12.11.69:9000
     depends_on:

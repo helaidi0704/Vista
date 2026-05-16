@@ -1,0 +1,46 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: worker-cpu
+  namespace: vista
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: worker-cpu
+  template:
+    metadata:
+      labels:
+        app: worker-cpu
+    spec:
+      containers:
+      - name: worker-cpu
+        image: europe-west4-docker.pkg.dev/ai-use-cases-486914/vista-repo/vista-worker-cpu:v4
+        envFrom:
+        - configMapRef:
+            name: vista-config
+        env:
+        - name: POSTGRES_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: vista-secrets
+              key: POSTGRES_PASSWORD
+        - name: MINIO_ACCESS_KEY
+          valueFrom:
+            secretKeyRef:
+              name: vista-secrets
+              key: MINIO_ACCESS_KEY
+        - name: MINIO_SECRET_KEY
+          valueFrom:
+            secretKeyRef:
+              name: vista-secrets
+              key: MINIO_SECRET_KEY
+        - name: CELERY_CONCURRENCY
+          value: "4"
+        resources:
+          requests:
+            memory: "512Mi"
+            cpu: "500m"
+          limits:
+            memory: "4Gi"
+            cpu: "2000m"
