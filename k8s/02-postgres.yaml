@@ -1,0 +1,71 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: pgdata
+  namespace: vista
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: 10Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: db
+  namespace: vista
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: db
+  template:
+    metadata:
+      labels:
+        app: db
+    spec:
+      containers:
+      - name: postgres
+        image: postgres:15-alpine
+        ports:
+        - containerPort: 5432
+        env:
+        - name: POSTGRES_USER
+          value: "vista"
+        - name: POSTGRES_DB
+          value: "vista"
+        - name: POSTGRES_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: vista-secrets
+              key: POSTGRES_PASSWORD
+        - name: PGDATA
+          value: "/var/lib/postgresql/data/pgdata"
+        volumeMounts:
+        - name: pgdata
+          mountPath: /var/lib/postgresql/data
+        - name: init-sql
+          mountPath: /docker-entrypoint-initdb.d
+        resources:
+          limits:
+            memory: "2Gi"
+            cpu: "1000m"
+      volumes:
+      - name: pgdata
+        persistentVolumeClaim:
+          claimName: pgdata
+      - name: init-sql
+        configMap:
+          name: init-sql
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: db
+  namespace: vista
+spec:
+  selector:
+    app: db
+  ports:
+  - port: 5432
+    targetPort: 5432
