@@ -1,0 +1,31 @@
+/* Testing page styles */
+
+.status-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  animation: pulse 2s infinite;
+}
+
+@keyframes pulse {
+  0%, 100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.6;
+  }
+}
+
+.viz-placeholder {
+  border-radius: 16px;
+  overflow: hidden;
+  background: #0d0e1a;
+}
+
+.file-upload-label {
+  &:hover {
+    border-color: var(--accent);
+    background: rgba(108, 99, 255, 0.05);
+  }
+}

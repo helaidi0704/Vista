@@ -1,0 +1,55 @@
+/* Training page styles */
+
+.palette-block {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 10px;
+  border-radius: 6px;
+  border: 1px dashed;
+  background: rgba(108, 99, 255, 0.1);
+  cursor: grab;
+  font-size: 12px;
+  font-weight: 500;
+  transition: all 0.15s;
+
+  &:hover {
+    cursor: grab;
+  }
+
+  &:active {
+    cursor: grabbing;
+  }
+}
+
+.section-title {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  margin-bottom: 8px;
+  margin-top: 12px;
+
+  &:first-of-type {
+    margin-top: 0;
+  }
+}
+
+.pipeline-block {
+  &:hover rect {
+    filter: brightness(1.1);
+  }
+}
+
+.progress-bar {
+  width: 100%;
+  height: 6px;
+  background: var(--bg-input);
+  border-radius: 3px;
+  overflow: hidden;
+
+  .progress-fill {
+    height: 100%;
+    background: linear-gradient(90deg, var(--accent), var(--cyan));
+    transition: width 0.6s ease-out;
+  }
+}

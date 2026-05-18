@@ -1,0 +1,241 @@
+<div class="fade-in" style="display:flex;gap:16px;height:calc(100vh - 120px);">
+
+  <!-- Left: Palette + Config -->
+  <div style="display:flex;flex-direction:column;gap:12px;width:260px;flex-shrink:0;overflow-y:auto;">
+
+    <!-- Block palette -->
+    <div class="card">
+      <div class="card-header" style="margin-bottom:10px;">
+        <span class="card-title">🧱 Blocs disponibles</span>
+      </div>
+      
+      <p class="section-title">Entrée Image</p>
+      <div style="display:flex;flex-direction:column;gap:6px;margin-bottom:12px;">
+        <ng-container *ngFor="let block of inputBlocks">
+          <div class="palette-block"
+               draggable="true"
+               [style.borderColor]="block.color + '40'"
+               [style.backgroundColor]="block.color + '10'">
+            <span>{{ block.icon }}</span>
+            <span>{{ block.label }}</span>
+          </div>
+        </ng-container>
+      </div>
+
+      <p class="section-title">Prétraitement & Augm.</p>
+      <div style="display:flex;flex-direction:column;gap:6px;margin-bottom:12px;">
+        <ng-container *ngFor="let block of preprocessBlocks">
+          <div class="palette-block"
+               draggable="true"
+               [style.borderColor]="block.color + '40'"
+               [style.backgroundColor]="block.color + '10'">
+            <span>{{ block.icon }}</span>
+            <span>{{ block.label }}</span>
+          </div>
+        </ng-container>
+      </div>
+
+      <p class="section-title">Modèles Vision</p>
+      <div style="display:flex;flex-direction:column;gap:6px;">
+        <ng-container *ngFor="let block of modelBlocks">
+          <div class="palette-block"
+               draggable="true"
+               [style.borderColor]="block.color + '40'"
+               [style.backgroundColor]="block.color + '10'">
+            <span>{{ block.icon }}</span>
+            <span>{{ block.label }}</span>
+          </div>
+        </ng-container>
+      </div>
+    </div>
+
+    <!-- Dataset selection -->
+    <div class="card">
+      <div class="card-header" style="margin-bottom:10px;">
+        <span class="card-title">💾 Dataset Image</span>
+      </div>
+      <div class="form-group" style="margin-bottom:10px;">
+        <label class="form-label">Sélectionner un dataset</label>
+        <select class="form-select" style="font-size:12px;" [(ngModel)]="selectedDataset">
+          <option *ngFor="let ds of datasets">{{ ds }}</option>
+        </select>
+      </div>
+      <div class="form-group" style="margin-bottom:10px;">
+        <label class="form-label">Split Train / Val / Test</label>
+        <div style="display:flex;gap:6px;align-items:center;font-size:12px;">
+          <span style="color:var(--accent);">70%</span>
+          <div class="progress-bar" style="flex:1;"><div class="progress-fill" style="width:70%;"></div></div>
+          <span style="color:var(--cyan);">20%</span>
+          <span style="color:var(--text-muted);">10%</span>
+        </div>
+      </div>
+      <div style="display:flex;gap:4px;flex-wrap:wrap;">
+        <span class="tag tag-green">OK: 10,240</span>
+        <span class="tag tag-red">Défauts: 4,007</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- Center: Canvas pipeline builder -->
+  <div style="flex:1;display:flex;flex-direction:column;gap:12px;min-width:0;">
+    <div class="card" style="flex:1;position:relative;overflow:hidden;">
+      <div class="card-header">
+        <span class="card-title">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="2" width="8" height="8" rx="1"/><rect x="14" y="2" width="8" height="8" rx="1"/><rect x="2" y="14" width="8" height="8" rx="1"/><rect x="14" y="14" width="8" height="8" rx="1"/></svg>
+          Pipeline — Glisser-déposer les blocs
+        </span>
+        <div style="display:flex;gap:6px;">
+          <button class="btn btn-sm btn-secondary">Effacer</button>
+          <button class="btn btn-sm btn-secondary">Importer JSON</button>
+          <button class="btn btn-sm btn-secondary">Exporter JSON</button>
+        </div>
+      </div>
+      <!-- SVG pipeline canvas -->
+      <svg #pipelineSvg id="pipeline-svg" style="width:100%;height:calc(100% - 50px);background:var(--bg-input);border-radius:8px;overflow:visible;cursor:move;">
+        <defs>
+          <marker id="arrow" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
+            <path d="M0,0 L0,6 L8,3 z" fill="rgba(108,99,255,0.8)"/>
+          </marker>
+          <pattern id="grid" width="24" height="24" patternUnits="userSpaceOnUse">
+            <circle cx="1" cy="1" r="0.8" fill="rgba(255,255,255,0.05)"/>
+          </pattern>
+        </defs>
+        <rect width="100%" height="100%" fill="url(#grid)"/>
+
+        <!-- Block: Image Input -->
+        <g transform="translate(30,80)" class="pipeline-block">
+          <rect width="130" height="56" rx="10" fill="#1A1D35" stroke="#6C63FF" stroke-width="1.5"/>
+          <text x="18" y="22" fill="#8B85FF" font-size="11" font-weight="600" font-family="Inter">🖼️ Image RGB</text>
+          <text x="18" y="38" fill="#555A7A" font-size="9" font-family="Inter">W, H = Auto</text>
+          <circle cx="130" cy="28" r="5" fill="#6C63FF" stroke="#0D0E1A" stroke-width="2"/>
+        </g>
+
+        <!-- Block: Resize -->
+        <g transform="translate(220,40)">
+          <rect width="130" height="56" rx="10" fill="#1A1D35" stroke="#FF9500" stroke-width="1.5"/>
+          <text x="18" y="22" fill="#FF9500" font-size="11" font-weight="600" font-family="Inter">✂️ Resize</text>
+          <text x="18" y="38" fill="#555A7A" font-size="9" font-family="Inter">640x640px</text>
+          <circle cx="0" cy="28" r="5" fill="#FF9500" stroke="#0D0E1A" stroke-width="2"/>
+          <circle cx="130" cy="28" r="5" fill="#FF9500" stroke="#0D0E1A" stroke-width="2"/>
+        </g>
+
+        <!-- Block: Data Aug -->
+        <g transform="translate(220,130)">
+          <rect width="130" height="56" rx="10" fill="#1A1D35" stroke="#FF9500" stroke-width="1.5"/>
+          <text x="18" y="22" fill="#FF9500" font-size="11" font-weight="600" font-family="Inter">🔄 Augmentation</text>
+          <text x="18" y="38" fill="#555A7A" font-size="9" font-family="Inter">RandRot, Flip, Hue</text>
+          <circle cx="0" cy="28" r="5" fill="#FF9500" stroke="#0D0E1A" stroke-width="2"/>
+          <circle cx="130" cy="28" r="5" fill="#FF9500" stroke="#0D0E1A" stroke-width="2"/>
+        </g>
+
+        <!-- Block: YOLOv8 -->
+        <g transform="translate(420,80)">
+          <rect width="150" height="70" rx="10" fill="#1A1D35" stroke="#00E5A0" stroke-width="1.5"/>
+          <text x="18" y="22" fill="#00E5A0" font-size="11" font-weight="600" font-family="Inter">🎯 YOLOv8</text>
+          <text x="18" y="38" fill="#555A7A" font-size="9" font-family="Inter">Object Detection</text>
+          <text x="18" y="52" fill="#555A7A" font-size="9" font-family="Inter">Pretrained yolov8s.pt</text>
+          <circle cx="0" cy="35" r="5" fill="#00E5A0" stroke="#0D0E1A" stroke-width="2"/>
+          <circle cx="150" cy="35" r="5" fill="#00E5A0" stroke="#0D0E1A" stroke-width="2"/>
+        </g>
+
+        <!-- Block: Output Bbox -->
+        <g transform="translate(640,80)">
+          <rect width="130" height="56" rx="10" fill="#1A1D35" stroke="#FF4567" stroke-width="1.5"/>
+          <text x="18" y="22" fill="#FF4567" font-size="11" font-weight="600" font-family="Inter">🚀 NMS & Sorties</text>
+          <text x="18" y="38" fill="#555A7A" font-size="9" font-family="Inter">BBox, Conf, Classes</text>
+          <circle cx="0" cy="28" r="5" fill="#FF4567" stroke="#0D0E1A" stroke-width="2"/>
+        </g>
+
+        <!-- Connections -->
+        <line x1="160" y1="108" x2="220" y2="68" stroke="rgba(108,99,255,0.6)" stroke-width="1.5" stroke-dasharray="4,3" marker-end="url(#arrow)"/>
+        <line x1="160" y1="108" x2="220" y2="158" stroke="rgba(108,99,255,0.6)" stroke-width="1.5" stroke-dasharray="4,3" marker-end="url(#arrow)"/>
+        <line x1="350" y1="68" x2="420" y2="108" stroke="rgba(255,149,0,0.6)" stroke-width="1.5" stroke-dasharray="4,3" marker-end="url(#arrow)"/>
+        <line x1="350" y1="158" x2="420" y2="108" stroke="rgba(255,149,0,0.6)" stroke-width="1.5" stroke-dasharray="4,3" marker-end="url(#arrow)"/>
+        <line x1="570" y1="115" x2="640" y2="108" stroke="rgba(0,229,160,0.6)" stroke-width="1.5" stroke-dasharray="4,3" marker-end="url(#arrow)"/>
+      </svg>
+    </div>
+
+    <!-- Launch bar -->
+    <div class="card" style="padding:16px;">
+      <div style="display:flex;align-items:center;gap:16px;flex-wrap:wrap;">
+        <div class="form-group" style="flex-direction:row;align-items:center;gap:8px;flex:0 0 auto;">
+          <label class="form-label" style="white-space:nowrap;">Epochs:</label>
+          <input type="number" class="form-input" [(ngModel)]="epochs" style="width:70px;font-size:12px;">
+        </div>
+        <div class="form-group" style="flex-direction:row;align-items:center;gap:8px;flex:0 0 auto;">
+          <label class="form-label" style="white-space:nowrap;">Batch size:</label>
+          <input type="number" class="form-input" [(ngModel)]="batchSize" style="width:70px;font-size:12px;">
+        </div>
+        <div class="form-group" style="flex-direction:row;align-items:center;gap:8px;flex:0 0 auto;">
+          <label class="form-label" style="white-space:nowrap;">Learning rate:</label>
+          <input type="text" class="form-input" [(ngModel)]="learningRate" style="width:80px;font-size:12px;">
+        </div>
+        <div class="form-group" style="flex-direction:row;align-items:center;gap:8px;flex:0 0 auto;">
+          <label class="form-label" style="white-space:nowrap;">Nom du modèle:</label>
+          <input type="text" class="form-input" [(ngModel)]="modelName" style="width:140px;font-size:12px;">
+        </div>
+        <button class="btn btn-primary" style="margin-left:auto;" [disabled]="isTraining()" (click)="launchTraining()">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+          {{ isTraining() ? 'Entraînement en cours…' : 'Lancer l\'entraînement' }}
+        </button>
+      </div>
+      <!-- Progress (shown during training) -->
+      <div *ngIf="isTraining()" style="margin-top:14px;">
+        <div style="display:flex;justify-content:space-between;font-size:12px;color:var(--text-secondary);margin-bottom:6px;">
+          <span>Epoch {{ trainingEpoch() }} / 100</span>
+          <span>Box Loss: <span style="color:var(--accent);">0.84</span> · Val mAP50: <span style="color:var(--green);">82.4%</span></span>
+          <span>ETA: 1h 42m</span>
+        </div>
+        <div class="progress-bar" style="height:8px;">
+          <div class="progress-fill" [style.width]="trainingProgress() + '%'"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Right: Model config panel -->
+  <div class="card" style="width:220px;flex-shrink:0;overflow-y:auto;">
+    <div class="card-header" style="margin-bottom:12px;">
+      <span class="card-title">⚙️ Config: YOLOv8</span>
+    </div>
+    <ng-container *ngFor="let config of yoloConfig">
+      <div class="form-group" style="margin-bottom:10px;">
+        <label class="form-label">{{ config.label }}</label>
+        
+        <ng-container [ngSwitch]="config.type">
+          <!-- Select -->
+          <select class="form-select" *ngSwitchCase="'select'" style="font-size:12px;" [(ngModel)]="config.value">
+            <option *ngFor="let opt of config.options" [value]="opt">{{ opt }}</option>
+          </select>
+
+          <!-- Range -->
+          <div *ngSwitchCase="'range'" style="display:flex;gap:8px;align-items:center;">
+            <input type="range" 
+                   [attr.min]="config.min" 
+                   [attr.max]="config.max" 
+                   [attr.step]="config.step" 
+                   [(ngModel)]="config.value" 
+                   style="flex:1;accent-color:var(--accent);">
+            <span style="font-size:11px;color:var(--text-secondary);width:28px;">{{ config.value }}</span>
+          </div>
+
+          <!-- Checkbox -->
+          <label *ngSwitchCase="'check'" style="display:flex;align-items:center;gap:8px;cursor:pointer;">
+            <input type="checkbox" 
+                   [checked]="config.value === '1'" 
+                   (change)="updateConfigValue(config, $event.target.checked)" 
+                   style="accent-color:var(--accent);">
+            <span style="font-size:12px;">{{ config.value === '1' ? 'Oui' : 'Non' }}</span>
+          </label>
+
+          <!-- Number/Text (default) -->
+          <input *ngSwitchDefault 
+                 [type]="config.type" 
+                 class="form-input" 
+                 [(ngModel)]="config.value" 
+                 style="font-size:12px;">
+        </ng-container>
+      </div>
+    </ng-container>
+  </div>
+</div>

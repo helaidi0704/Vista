@@ -1,18 +1,4 @@
-<!DOCTYPE html>
-<html lang="fr">
-
-<head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>VISTA — Inspection Visuelle Industrielle</title>
-  <link rel="preconnect" href="https://fonts.googleapis.com" />
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap"
-    rel="stylesheet" />
-  <link rel="stylesheet" href="styles/main.css" />
-</head>
-
-<body>
-  <!-- Sidebar -->
+<div class="layout">
   <aside class="sidebar" id="sidebar">
     <div class="sidebar-logo">
       <div class="logo-icon">
@@ -24,15 +10,16 @@
       </div>
       <span class="logo-text">VISTA</span>
     </div>
+
     <nav class="sidebar-nav">
-      <a class="nav-item active" data-page="home" href="#home">
+      <a class="nav-item" [class.active]="currentPage() === 'accueil'" data-page="home" (click)="setPage('accueil')">
         <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <path d="M3 9l9-7 9 7v11a2 2 0 01-2 2H5a2 2 0 01-2-2z" />
           <polyline points="9,22 9,12 15,12 15,22" />
         </svg>
         <span>Accueil</span>
       </a>
-      <a class="nav-item" data-page="viewer" href="#viewer">
+      <a class="nav-item" [class.active]="currentPage() === 'annotation'" data-page="viewer" (click)="setPage('annotation')">
         <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <rect x="3" y="3" width="18" height="18" rx="2" />
           <circle cx="8.5" cy="8.5" r="1.5" />
@@ -41,7 +28,7 @@
         <span>Visualiseur & Annotation</span>
         <span class="nav-badge">1</span>
       </a>
-      <a class="nav-item" data-page="analysis" href="#analysis">
+      <a class="nav-item" [class.active]="currentPage() === 'analyse'" data-page="analyse" (click)="setPage('analyse')">
         <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <path
             d="M21 16V8a2 2 0 00-1-1.73l-7-4a2 2 0 00-2 0l-7 4A2 2 0 003 8v8a2 2 0 001 1.73l7 4a2 2 0 002 0l7-4A2 2 0 0021 16z">
@@ -52,7 +39,7 @@
         <span>Analyse & Comparaison</span>
         <span class="nav-badge">2</span>
       </a>
-      <a class="nav-item" data-page="training" href="#training">
+      <a class="nav-item" [class.active]="currentPage() === 'training'" data-page="training" (click)="setPage('training')">
         <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <rect x="2" y="3" width="20" height="14" rx="2" />
           <path d="M8 21h8M12 17v4" />
@@ -60,7 +47,7 @@
         <span>Entraînement de Modèles</span>
         <span class="nav-badge">3</span>
       </a>
-      <a class="nav-item" data-page="testing" href="#testing">
+      <a class="nav-item" [class.active]="currentPage() === 'testing'" data-page="testing" (click)="setPage('testing')">
         <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"></path>
           <circle cx="12" cy="13" r="4"></circle>
@@ -68,7 +55,7 @@
         <span>Test en live & Explicabilité</span>
         <span class="nav-badge">4</span>
       </a>
-      <a class="nav-item" data-page="deployment" href="#deployment">
+      <a class="nav-item" [class.active]="currentPage() === 'deployment'" data-page="deployment" (click)="setPage('deployment')">
         <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <path d="M12 2L2 7l10 5 10-5-10-5z" />
           <path d="M2 17l10 5 10-5" />
@@ -78,6 +65,7 @@
         <span class="nav-badge">5</span>
       </a>
     </nav>
+
     <div class="sidebar-footer">
       <div class="user-chip">
         <div class="user-avatar">M</div>
@@ -89,9 +77,7 @@
     </div>
   </aside>
 
-  <!-- Main content -->
   <main class="main-content" id="main-content">
-    <!-- Top bar -->
     <header class="topbar">
       <div class="topbar-left">
         <h1 class="page-title" id="page-title">Accueil</h1>
@@ -114,22 +100,23 @@
       </div>
     </header>
 
-    <!-- Pages -->
-    <div class="page active" id="page-home"></div>
-    <div class="page" id="page-viewer"></div>
-    <div class="page" id="page-analysis"></div>
-    <div class="page" id="page-training"></div>
-    <div class="page" id="page-testing"></div>
-    <div class="page" id="page-deployment"></div>
+    <div class="page" [class.active]="currentPage() === 'accueil'" id="page-home">
+      <app-accueil *ngIf="currentPage() === 'accueil'"></app-accueil>
+    </div>
+    <div class="page" [class.active]="currentPage() === 'annotation'" id="page-viewer">
+      <app-annotation *ngIf="currentPage() === 'annotation'"></app-annotation>
+    </div>
+        <div class="page" [class.active]="currentPage() === 'analyse'" id="page-analysis">
+      <app-analyze *ngIf="currentPage() === 'analyse'"></app-analyze>
+    </div>
+    <div class="page" [class.active]="currentPage() === 'training'" id="page-training">
+      <app-training *ngIf="currentPage() === 'training'"></app-training>
+    </div>
+    <div class="page" [class.active]="currentPage() === 'testing'" id="page-testing">
+      <app-testing *ngIf="currentPage() === 'testing'"></app-testing>
+    </div>
+    <div class="page" [class.active]="currentPage() === 'deployment'" id="page-deployment">
+      <app-deployment *ngIf="currentPage() === 'deployment'"></app-deployment>
+    </div>
   </main>
-
-  <script src="js/home.js"></script>
-  <script src="js/image-viewer.js"></script>
-  <script src="js/image-analysis.js"></script>
-  <script src="js/training.js"></script>
-  <script src="js/live-testing.js"></script>
-  <script src="js/deployment.js"></script>
-  <script src="js/app.js"></script>
-</body>
-
-</html>
+</div>

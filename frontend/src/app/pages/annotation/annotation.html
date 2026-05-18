@@ -1,0 +1,144 @@
+<div class="fade-in">
+  <!-- File picker row -->
+  <div style="display:flex;gap:12px;align-items:center;margin-bottom:20px;flex-wrap:wrap;">
+    <div class="card" style="flex:1;min-width:260px;padding:14px 18px;display:flex;align-items:center;gap:12px;">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>
+      <div style="flex:1;">
+        <div style="font-size:13px;font-weight:600;">{{ imageFileName() }}</div>
+        <div style="font-size:11px;color:var(--text-muted);">{{ imageFileMeta() }}</div>
+      </div>
+      <span class="tag tag-orange">À Inspecter</span>
+    </div>
+    <button class="btn btn-secondary" (click)="openImagePicker()">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M17 8l-5-5-5 5M12 3v12"/></svg>
+      Importer image
+    </button>
+    <input #fileInput type="file" accept="image/*" hidden (change)="onFileSelected($event)" />
+    <button class="btn btn-secondary">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="2" width="20" height="20" rx="2"/><line x1="8" y1="12" x2="16" y2="12"/></svg>
+      Bibliothèque
+    </button>
+  </div>
+
+  <div class="grid-3">
+    <!-- Image Canvas Area (Span 2) -->
+    <div class="card col-span-2" style="display:flex;flex-direction:column;">
+      <div class="card-header">
+        <span class="card-title">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/></svg>
+          Éditeur Interactif
+        </span>
+        <div style="display:flex;gap:8px;align-items:center;">
+          <button class="btn btn-sm btn-secondary" (click)="setTool('pan')">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 8a6 6 0 00-12 0v7h12V8z"/><path d="M9 15v4m6-4v4"/></svg>
+          </button>
+          <button class="btn btn-sm btn-primary" (click)="setTool('rect')">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/></svg>
+          </button>
+          <button class="btn btn-sm btn-secondary" (click)="setTool('draw')">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 19l7-7 3 3-7 7-3-3z"/><path d="M18 13l-1.5-7.5L2 2l3.5 14.5L13 18l5-5z"/><path d="M2 2l7.586 7.586"/><circle cx="11" cy="11" r="2"/></svg>
+          </button>
+          <div style="width:1px;height:20px;background:var(--border);margin:0 4px;"></div>
+          <span style="font-size:11px;color:var(--text-muted);">Zoom: {{zoom()}}%</span>
+          <input type="range" min="0.5" max="3" value="1" step="0.1" style="width:80px;accent-color:var(--accent);">
+          <button class="btn btn-sm btn-secondary">Reset</button>
+        </div>
+      </div>
+
+      <!-- Canvas Container -->
+      <div class="viz-placeholder" style="flex:1;min-height:380px;cursor:crosshair;position:relative;overflow:hidden;background:#0D0E1A;" id="image-container">
+        <canvas #imageCanvas style="position:absolute;top:0;left:0;"></canvas>
+        <canvas #drawCanvas style="position:absolute;top:0;left:0;"></canvas>
+      </div>
+    </div>
+
+    <!-- Annotation Panel -->
+    <div class="card" style="display:flex;flex-direction:column;">
+      <div class="card-header">
+        <span class="card-title">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 11.5a8.38 8.38 0 01-.9 3.8 8.5 8.5 0 01-7.6 4.7 8.38 8.38 0 01-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 01-.9-3.8 8.5 8.5 0 014.7-7.6 8.38 8.38 0 013.8-.9h.5a8.48 8.48 0 018 8v.5z"/></svg>
+          Propriétés d'Annotation
+        </span>
+      </div>
+
+      <div class="form-group" style="margin-bottom:12px;">
+        <label class="form-label">Type de défaut</label>
+        <select class="form-select" [(ngModel)]="annotationType">
+          <option>Rayure profonde</option>
+          <option>Fissure (micro)</option>
+          <option>Décoloration / Tâche</option>
+          <option>Défaut d'usinage (Bavure)</option>
+          <option>Pièce manquante</option>
+        </select>
+      </div>
+
+      <div class="form-group" style="margin-bottom:12px;">
+        <label class="form-label">Sévérité du défaut</label>
+        <div style="display:flex;gap:8px;" id="annot-severity-container">
+          <button class="btn btn-sm" [class.btn-danger]="selectedSeverity() === 'Critique'" [class.btn-secondary]="selectedSeverity() !== 'Critique'" (click)="setSeverity('Critique')">Critique</button>
+          <button class="btn btn-sm" [class.btn-orange]="selectedSeverity() === 'Majeur'" [class.btn-secondary]="selectedSeverity() !== 'Majeur'" (click)="setSeverity('Majeur')">Majeur</button>
+          <button class="btn btn-sm" [class.btn-success]="selectedSeverity() === 'Mineur'" [class.btn-secondary]="selectedSeverity() !== 'Mineur'" (click)="setSeverity('Mineur')">Mineur</button>
+        </div>
+      </div>
+
+      <div class="form-group" style="margin-bottom:12px;">
+        <label class="form-label">Description détaillée contextuelle</label>
+        <textarea class="form-textarea" [(ngModel)]="annotationDesc" placeholder="Ex: Rayure longitudinale causée par un frottement outil sur l'axe X..."></textarea>
+      </div>
+
+      <div class="form-group" style="margin-bottom:16px;">
+        <label class="form-label">Calque courant</label>
+        <div style="display:flex;gap:8px;align-items:center;background:var(--bg-input);padding:8px 12px;border-radius:6px;">
+          <div style="width:12px;height:12px;border:2px solid var(--accent);border-radius:2px;"></div>
+          <span style="font-size:12px;flex:1;">Shape_04 (BBox)</span>
+          <button class="btn btn-sm" style="padding:4px;background:none;border:none;">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--red)" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2"/></svg>
+          </button>
+        </div>
+      </div>
+
+      <button class="btn btn-primary" style="width:100%;margin-top:auto;" (click)="saveAnnotation()">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><path d="M19 21H5a2 2 0 01-2-2V5a2 2 0 012-2h11l5 5v11a2 2 0 01-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>
+        Enregistrer les annotations
+      </button>
+    </div>
+  </div>
+
+  <!-- Annotation history / Objects list -->
+  <div class="card" style="margin-top:16px;">
+    <div class="card-header">
+      <span class="card-title">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+        Liste des objets annotés sur cette image
+      </span>
+      <span style="font-size:12px;color:var(--text-muted);" id="annotations-count">{{imageAnnotations().length}} annotation(s) trouvée(s)</span>
+    </div>
+    <table style="width:100%;border-collapse:collapse;font-size:12px;">
+      <thead>
+        <tr style="color:var(--text-muted);">
+          <th style="text-align:left;padding:8px 12px;border-bottom:1px solid var(--border);">Type de Forme</th>
+          <th style="padding:8px 12px;border-bottom:1px solid var(--border);">Classe (Défaut)</th>
+          <th style="padding:8px 12px;border-bottom:1px solid var(--border);">Sévérité</th>
+          <th style="text-align:left;padding:8px 12px;border-bottom:1px solid var(--border);">Description textuelle</th>
+          <th style="padding:8px 12px;border-bottom:1px solid var(--border);">Action</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr *ngFor="let ann of imageAnnotations()"
+            style="border-bottom:1px solid var(--border); transition:background 0.2s; cursor:pointer;"
+            [style.background]="ann.id === hoveredAnnotId() ? 'var(--bg-card-hover)' : 'transparent'"
+            (mouseenter)="hoverAnnotation(ann.id, true)"
+            (mouseleave)="hoverAnnotation(ann.id, false)">
+          <td style="padding:10px 12px;color:var(--cyan);font-family:monospace;">{{ann.shape}}</td>
+          <td style="padding:10px 12px;text-align:center;"><span style="color:var(--text-primary);font-weight:600;">{{ann.def}}</span></td>
+          <td style="padding:10px 12px;text-align:center;"><span class="tag {{ann.scls}}">{{ann.sev}}</span></td>
+          <td style="padding:10px 12px;color:var(--text-secondary);max-width:320px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">{{ann.desc}}</td>
+          <td style="padding:10px 12px;text-align:center;">
+            <button class="btn btn-sm btn-secondary" style="margin-right:4px;">Éditer</button>
+            <button class="btn btn-sm btn-danger" (click)="deleteAnnotation(ann.id)">🗑</button>
+          </td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+</div>

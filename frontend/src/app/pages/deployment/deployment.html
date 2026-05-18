@@ -1,0 +1,199 @@
+<div class="fade-in">
+  <!-- Deployed models overview -->
+  <div class="grid-3" style="margin-bottom: 20px;">
+    @for (model of deployedModels(); track model.name) {
+      <div class="card">
+        <div style="display: flex; align-items: flex-start; justify-content: space-between; margin-bottom: 12px;">
+          <div>
+            <div style="font-size: 14px; font-weight: 700; margin-bottom: 4px;">{{ model.name }}</div>
+            <span [class]="'tag ' + model.statusClass">{{ model.status }}</span>
+          </div>
+          <div style="display: flex; gap: 6px;">
+            <button class="btn btn-sm btn-secondary">Logs</button>
+            <button class="btn btn-sm btn-secondary">⋮</button>
+          </div>
+        </div>
+        <div style="display: flex; flex-direction: column; gap: 6px; font-size: 12px; color: var(--text-secondary);">
+          <div style="display: flex; justify-content: space-between;">
+            <span>Précision</span>
+            <span style="color: var(--green); font-weight: 600;">{{ model.accuracy }}</span>
+          </div>
+          <div style="display: flex; justify-content: space-between;">
+            <span>Requêtes</span>
+            <span>{{ model.requests }}</span>
+          </div>
+          <div style="display: flex; justify-content: space-between;">
+            <span>Format / Cible</span>
+            <span>{{ model.target }}</span>
+          </div>
+          <div style="display: flex; justify-content: space-between;">
+            <span>Uptime</span>
+            <span [style.color]="'var(' + model.statusDot + ')'" style="font-weight: 600;">{{ model.uptime }}</span>
+          </div>
+        </div>
+      </div>
+    }
+  </div>
+
+  <div class="grid-2" style="margin-bottom: 16px;">
+    <!-- Deploy new model -->
+    <div class="card">
+      <div class="card-header" style="margin-bottom: 16px;">
+        <span class="card-title">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M12 2L2 7l10 5 10-5-10-5z" />
+            <path d="M2 17l10 5 10-5" />
+            <path d="M2 12l10 5 10-5" />
+          </svg>
+          Déployer un modèle Vision
+        </span>
+      </div>
+      <div class="form-group" style="margin-bottom: 12px;">
+        <label class="form-label">Modèle à packager / déployer</label>
+        <select class="form-select" [(ngModel)]="selectedModel">
+          @for (model of deployedModels(); track model.name) {
+            <option>{{ model.name }}</option>
+          }
+        </select>
+      </div>
+      <div class="form-group" style="margin-bottom: 12px;">
+        <label class="form-label">Format de sortie (Déploiement cible)</label>
+        <div class="toggle-group" style="margin-top: 4px;">
+          @for (type of deploymentTypeOptions; track type; let first = $first) {
+            <span
+              class="toggle-chip"
+              [class.active]="selectedDeployType() === type"
+              (click)="selectDeployType(type)"
+            >
+              {{ type }}
+            </span>
+          }
+        </div>
+      </div>
+
+      <!-- API REST config -->
+      @if (selectedDeployType() === 'API REST (JSON)') {
+        <div style="display: flex; flex-direction: column; gap: 10px; margin-bottom: 16px;">
+          <div class="form-group">
+            <label class="form-label">Endpoint URL généré</label>
+            <input type="text" class="form-input" [(ngModel)]="deploymentEndpoint" style="font-size: 12px; font-family: monospace;" />
+          </div>
+          <div class="form-group">
+            <label class="form-label">Format d'Image en Entrée</label>
+            <select class="form-select" [(ngModel)]="imageFormat" style="font-size: 12px;">
+              <option>JSON (Base64 JPEG/PNG)</option>
+              <option>Multipart File Upload</option>
+            </select>
+          </div>
+          <div style="display: flex; gap: 8px;">
+            <div class="form-group" style="flex: 1;">
+              <label class="form-label">Résolution max supportée</label>
+              <select class="form-select" [(ngModel)]="resolutionMax" style="font-size: 12px;">
+                <option>640x640</option>
+                <option>1024x1024</option>
+                <option>Original (Auto-resize)</option>
+              </select>
+            </div>
+            <div class="form-group" style="width: 100px;">
+              <label class="form-label">Max batch size</label>
+              <input type="number" class="form-input" [(ngModel)]="maxBatchSize" style="font-size: 12px;" />
+            </div>
+          </div>
+          <div style="display: flex; gap: 10px; margin-top: 6px;">
+            <label style="display: flex; align-items: center; gap: 6px; font-size: 12px; cursor: pointer;">
+              <input type="checkbox" [(ngModel)]="includeGradCAM" style="accent-color: var(--accent);" />
+              Inclure masque Grad-CAM
+            </label>
+            <label style="display: flex; align-items: center; gap: 6px; font-size: 12px; cursor: pointer;">
+              <input type="checkbox" [(ngModel)]="autoAlignment" style="accent-color: var(--accent);" />
+              Auto-alignement (GPU)
+            </label>
+          </div>
+        </div>
+      }
+
+      <button
+        class="btn btn-primary"
+        style="width: 100%;"
+        (click)="deployModel()"
+        [disabled]="deploymentInProgress()"
+      >
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14">
+          <path d="M12 2L2 7l10 5 10-5-10-5z" />
+        </svg>
+        @if (deploymentMessage()) {
+          {{ deploymentMessage() }}
+        } @else {
+          Générer / Déployer
+        }
+      </button>
+    </div>
+
+    <!-- API documentation preview -->
+    <div class="card">
+      <div class="card-header" style="margin-bottom: 12px;">
+        <span class="card-title">📄 Exemple de Requête & Réponse</span>
+        <div style="display: flex; gap: 6px;">
+          <button class="btn btn-sm btn-secondary">Copier</button>
+          <button class="btn btn-sm btn-secondary">Swagger UI</button>
+        </div>
+      </div>
+      <div style="background: var(--bg-input); border-radius: 8px; padding: 14px; font-family: monospace; font-size: 11px; color: var(--text-secondary); max-height: 280px; overflow-y: auto; line-height: 1.7;">
+        <span style="color: #ff9500;">POST</span> <span style="color: #00d4ff;">/api/vision/v1/detect</span><br />
+        <span style="color: var(--text-muted);">Content-Type: application/json</span><br />
+        <span style="color: var(--text-muted);">Authorization: ApiKey &lt;your-key&gt;</span><br /><br />
+        <span style="color: #6c63ff;">// Request body</span><br />
+        &#123;<br />
+        &nbsp;&nbsp;<span style="color: #00e5a0;">"image_b64"</span>: <span style="color: #ffd60a;">"/9j/4AAQSkZJRgABA..."</span>,<br />
+        &nbsp;&nbsp;<span style="color: #00e5a0;">"return_gradcam"</span>: <span style="color: #ff9500;">true</span>,<br />
+        &nbsp;&nbsp;<span style="color: #00e5a0;">"threshold"</span>: <span style="color: #ff9500;">0.50</span><br />
+        &#125;<br /><br />
+        <span style="color: #6c63ff;">// Response (200 OK)</span><br />
+        &#123;<br />
+        &nbsp;&nbsp;<span style="color: #00e5a0;">"status"</span>: <span style="color: #ffd60a;">"SUCCESS"</span>,<br />
+        &nbsp;&nbsp;<span style="color: #00e5a0;">"detections"</span>: [<br />
+        &nbsp;&nbsp;&nbsp;&nbsp;&#123;<br />
+        &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span style="color: #00e5a0;">"class"</span>: <span style="color: #ffd60a;">"Bavure"</span>,<br />
+        &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span style="color: #00e5a0;">"confidence"</span>: <span style="color: #ff9500;">0.942</span>,<br />
+        &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span style="color: #00e5a0;">"bbox"</span>: [<span style="color: #ff9500;">120</span>, <span style="color: #ff9500;">340</span>, <span style="color: #ff9500;">160</span>, <span style="color: #ff9500;">380</span>]<br />
+        &nbsp;&nbsp;&nbsp;&nbsp;&#125;<br />
+        &nbsp;&nbsp;],<br />
+        &nbsp;&nbsp;<span style="color: #00e5a0;">"explanation_heatmap"</span>: <span style="color: #ffd60a;">"iVBORw0KGgoAAA..."</span>,<br />
+        &nbsp;&nbsp;<span style="color: #00e5a0;">"latency_ms"</span>: <span style="color: #ff9500;">18</span><br />
+        &#125;
+      </div>
+    </div>
+  </div>
+
+  <!-- Monitoring dashboard -->
+  <div class="card">
+    <div class="card-header" style="margin-bottom: 16px;">
+      <span class="card-title">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <polyline points="22 12 18 12 15 21 9 3 6 12 2 12" />
+        </svg>
+        Supervision — {{ selectedModel() }}
+      </span>
+      <div style="display: flex; gap: 6px; flex-wrap: wrap;">
+        @for (range of ['1h', '24h', '7j', '30j']; track range) {
+          <span class="toggle-chip" [class.active]="selectedTimeRange() === range" (click)="selectTimeRange(range)">
+            {{ range }}
+          </span>
+        }
+      </div>
+    </div>
+    <div class="grid-4" style="margin-bottom: 16px;">
+      @for (metric of monitoringMetrics(); track metric.label) {
+        <div style="background: var(--bg-input); border-radius: 10px; padding: 14px;">
+          <div [style.color]="'var(' + metric.color + ')'" style="font-size: 20px; font-weight: 800;">
+            {{ metric.value }}
+          </div>
+          <div style="font-size: 12px; font-weight: 500; margin-top: 4px;">{{ metric.label }}</div>
+          <div style="font-size: 11px; color: var(--text-muted); margin-top: 2px;">{{ metric.trend }}</div>
+        </div>
+      }
+    </div>
+    <!-- Monitoring chart -->
+    <canvas #monitorCanvas width="1000" height="120" style="width: 100%; border-radius: 8px;"></canvas>
+  </div>
+</div>
