@@ -290,6 +290,71 @@ async def get_model(model_id: UUID, db: AsyncSession = Depends(get_db)):
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
+
+
+@router.post("/models/{model_id}/retrain", response_model=TrainingJobOut, status_code=202)
+async def retrain_model(
+    model_id: UUID,
+    epochs: int = 20,
+    lr: float = 0.001,
+    db: AsyncSession = Depends(get_db),
+    user=Depends(get_current_user),
+):
+    """
+    Retrain an existing model with updated dataset.
+    Uses the previous model weights as starting point (transfer learning).
+    Faster and better than training from scratch.
+    """
+    # Get the existing model
+    result = await db.execute(select(MLModel).where(MLModel.id == model_id))
+    model = result.scalar_one_or_none()
+    if not model:
+        raise HTTPException(404, "Model not found")
+
+    # Get the original training job to find dataset_id
+    original_job = None
+    if model.training_job_id:
+        job_result = await db.execute(select(TrainingJob).where(TrainingJob.id == model.training_job_id))
+        original_job = job_result.scalar_one_or_none()
+
+    if not original_job:
+        raise HTTPException(400, "Cannot retrain: original training job not found")
+
+    # Create new training job with retrain flag
+    job = TrainingJob(
+        name=f"{model.name}_retrained",
+        dataset_id=original_job.dataset_id,
+        architecture=model.architecture,
+        task_type=model.task_type,
+        hyperparams={
+            "epochs": epochs,
+            "batch_size": original_job.hyperparams.get("batch_size", 16) if isinstance(original_job.hyperparams, dict) else 16,
+            "lr": lr,
+            "optimizer": original_job.hyperparams.get("optimizer", "AdamW") if isinstance(original_job.hyperparams, dict) else "AdamW",
+            "retrain_from": str(model_id),
+            "base_weights": model.weights_path,
+        },
+        total_epochs=epochs,
+        status="queued",
+    )
+    if user and user.get("organization_id"):
+        job.organization_id = user["organization_id"]
+    db.add(job)
+    await db.flush()
+    await db.refresh(job)
+
+    # Dispatch to GPU queue
+    task = celery_app.send_task(
+        "tasks.train_model",
+        args=[str(job.id)],
+        queue="gpu",
+    )
+    job.celery_task_id = task.id
+    await db.flush()
+
+    logger.info(f"Retrain job created: {job.id} from model {model_id}")
+    return job
+
 # INFERENCE — SEQ 3
 # ═══════════════════════════════════════════════════════════════════════════════
 

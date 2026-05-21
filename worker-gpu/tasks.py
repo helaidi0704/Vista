@@ -351,10 +351,32 @@ def train_model(self, job_id: str):
         model_file = model_map.get(architecture, "yolov8s.pt")
 
         device = "cuda" if torch.cuda.is_available() else "cpu"
-        logger.info(f"Loading {model_file} on device: {device}")
-        publish_metric(job_id, {"status": "running", "message": f"Loading {model_file} on {device}..."})
 
-        model = YOLO(model_file)
+        # ===== REAL V3: RETRAIN SUPPORT =====
+        # If hyperparams contain "base_weights", load the previous model
+        # instead of pretrained COCO — this is transfer learning
+        base_weights = hyperparams.get("base_weights")
+        if base_weights:
+            logger.info(f"RETRAIN MODE: Loading previous weights from {base_weights}")
+            publish_metric(job_id, {"status": "running", "message": "Loading previous model weights (transfer learning)..."})
+            # Download previous weights from MinIO
+            retrain_weights_path = f"/tmp/retrain_{job_id}.pt"
+            try:
+                s3 = get_s3()
+                s3.download_file(
+                    os.environ.get("MINIO_BUCKET_MODELS", "models-weights"),
+                    base_weights,
+                    retrain_weights_path,
+                )
+                model = YOLO(retrain_weights_path)
+                logger.info(f"Loaded retrain weights from {base_weights}")
+            except Exception as e:
+                logger.warning(f"Failed to load retrain weights: {e}, falling back to {model_file}")
+                model = YOLO(model_file)
+        else:
+            logger.info(f"Loading {model_file} on device: {device}")
+            publish_metric(job_id, {"status": "running", "message": f"Loading {model_file} on {device}..."})
+            model = YOLO(model_file)
 
         # ═══════════════════════════════════════════════════════════════
         # ===== REAL V2: SETUP TRAINING CALLBACKS (NEW) =====
