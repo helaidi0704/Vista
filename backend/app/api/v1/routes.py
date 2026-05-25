@@ -1258,3 +1258,208 @@ async def live_dashboard(
         "weekly_trend": weekly_trend,
     }
 
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# COMPARISON VIEW — Golden Reference
+# ═══════════════════════════════════════════════════════════════════════════════
+
+@router.post("/compare/images")
+async def compare_two_images(
+    image_a: UploadFile = File(...),
+    image_b: UploadFile = File(...),
+    sensitivity: float = 30.0,
+):
+    """Compare two images and highlight differences."""
+    import numpy as np
+    import cv2
+    from io import BytesIO
+    from PIL import Image as PILImage
+
+    a_bytes = await image_a.read()
+    b_bytes = await image_b.read()
+    img_a = np.array(PILImage.open(BytesIO(a_bytes)).convert("RGB"))
+    img_b = np.array(PILImage.open(BytesIO(b_bytes)).convert("RGB"))
+    h, w = img_a.shape[:2]
+    img_b = cv2.resize(img_b, (w, h))
+    gray_a = cv2.GaussianBlur(cv2.cvtColor(img_a, cv2.COLOR_RGB2GRAY), (5, 5), 0)
+    gray_b = cv2.GaussianBlur(cv2.cvtColor(img_b, cv2.COLOR_RGB2GRAY), (5, 5), 0)
+    diff = cv2.absdiff(gray_a, gray_b)
+    _, thresh = cv2.threshold(diff, sensitivity, 255, cv2.THRESH_BINARY)
+    diff_pixels = cv2.countNonZero(thresh)
+    total_pixels = w * h
+    similarity = round((1 - diff_pixels / total_pixels) * 100, 1)
+    contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    significant_zones = [c for c in contours if cv2.contourArea(c) > 50]
+    zones = []
+    for c in significant_zones:
+        x, y, cw, ch = cv2.boundingRect(c)
+        zones.append({"bbox": [int(x), int(y), int(x+cw), int(y+ch)], "area_percent": round(cv2.contourArea(c)/(w*h)*100, 2)})
+    return {
+        "similarity_percent": similarity,
+        "different_pixels": diff_pixels,
+        "total_pixels": total_pixels,
+        "deviation_zones": len(zones),
+        "zones": zones,
+        "verdict": "IDENTICAL" if similarity > 98 else "SIMILAR" if similarity > 90 else "DIFFERENT",
+    }
+
+
+@router.post("/compare/reference")
+async def compare_with_reference(
+    reference_image: UploadFile = File(...),
+    inspection_image: UploadFile = File(...),
+    sensitivity: float = 30.0,
+    user=Depends(get_current_user),
+):
+    """Compare production part against golden reference. Returns heatmap URL."""
+    import numpy as np
+    import cv2
+    from io import BytesIO
+    from PIL import Image as PILImage
+    from datetime import datetime
+
+    ref_bytes = await reference_image.read()
+    insp_bytes = await inspection_image.read()
+    ref_img = np.array(PILImage.open(BytesIO(ref_bytes)).convert("RGB"))
+    insp_img = np.array(PILImage.open(BytesIO(insp_bytes)).convert("RGB"))
+    h, w = ref_img.shape[:2]
+    insp_img = cv2.resize(insp_img, (w, h))
+    ref_gray = cv2.GaussianBlur(cv2.cvtColor(ref_img, cv2.COLOR_RGB2GRAY), (5, 5), 0)
+    insp_gray = cv2.GaussianBlur(cv2.cvtColor(insp_img, cv2.COLOR_RGB2GRAY), (5, 5), 0)
+    diff = cv2.absdiff(ref_gray, insp_gray)
+    _, thresh = cv2.threshold(diff, sensitivity, 255, cv2.THRESH_BINARY)
+    contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
+    diff_normalized = cv2.normalize(diff, None, 0, 255, cv2.NORM_MINMAX)
+    heatmap = cv2.applyColorMap(diff_normalized, cv2.COLORMAP_JET)
+    overlay = cv2.addWeighted(cv2.cvtColor(insp_img, cv2.COLOR_RGB2BGR), 0.6, heatmap, 0.4, 0)
+
+    zones = []
+    for c in contours:
+        area = cv2.contourArea(c)
+        if area < 50:
+            continue
+        x, y, cw, ch = cv2.boundingRect(c)
+        cv2.rectangle(overlay, (x, y), (x+cw, y+ch), (0, 255, 255), 2)
+        zones.append({"id": len(zones)+1, "bbox": [int(x), int(y), int(x+cw), int(y+ch)], "area_percent": round(area/(w*h)*100, 2)})
+
+    _, img_encoded = cv2.imencode(".png", overlay)
+    heat_key = f"comparisons/{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}_heatmap.png"
+    from app.core.storage import get_s3_client, generate_presigned_url
+    s3 = get_s3_client()
+    s3.put_object(Bucket="exports", Key=heat_key, Body=img_encoded.tobytes(), ContentType="image/png")
+    heatmap_url = generate_presigned_url("exports", heat_key)
+
+    total_diff = sum(cv2.contourArea(c) for c in contours if cv2.contourArea(c) > 50)
+    score = min(100, round(total_diff / (w*h) * 1000, 1))
+    verdict = "PASS" if score < 5 else "REVIEW" if score < 15 else "FAIL"
+
+    return {
+        "verdict": verdict, "deviation_score": score, "zones": zones,
+        "heatmap_url": heatmap_url, "message": f"{verdict}: {len(zones)} zones (score: {score}/100)",
+    }
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# EXPORT — CSV
+# ═══════════════════════════════════════════════════════════════════════════════
+
+@router.get("/export/annotations/{dataset_id}")
+async def export_annotations_csv(
+    dataset_id: UUID, format: str = "csv",
+    db: AsyncSession = Depends(get_db), user=Depends(get_current_user),
+):
+    """Export annotations as CSV. Quality managers import into Excel."""
+    from fastapi.responses import StreamingResponse
+    import csv, io
+
+    ds = await db.execute(select(Dataset).where(Dataset.id == dataset_id))
+    dataset = ds.scalar_one_or_none()
+    if not dataset:
+        raise HTTPException(404, "Dataset not found")
+
+    imgs = await db.execute(select(Image).where(Image.dataset_id == dataset_id))
+    images = {str(i.id): i for i in imgs.scalars().all()}
+    anns = await db.execute(select(Annotation).where(Annotation.image_id.in_(list(images.keys()))))
+    annotations = anns.scalars().all()
+
+    if format == "json":
+        rows = [{"image": images.get(str(a.image_id), Image()).filename if images.get(str(a.image_id)) else "?",
+                 "class": a.defect_class, "severity": a.severity,
+                 "coords": a.coordinates, "date": a.created_at.isoformat() if a.created_at else ""} for a in annotations]
+        return {"dataset": dataset.name, "total": len(rows), "annotations": rows}
+
+    output = io.StringIO()
+    w = csv.writer(output)
+    w.writerow(["image", "defect_class", "severity", "bbox_x", "bbox_y", "bbox_w", "bbox_h", "date"])
+    for a in annotations:
+        img = images.get(str(a.image_id))
+        c = a.coordinates if isinstance(a.coordinates, dict) else {}
+        w.writerow([img.filename if img else "?", a.defect_class, a.severity,
+                    c.get("nx",0), c.get("ny",0), c.get("nw",0), c.get("nh",0),
+                    a.created_at.isoformat() if a.created_at else ""])
+    output.seek(0)
+    return StreamingResponse(iter([output.getvalue()]), media_type="text/csv",
+        headers={"Content-Disposition": f"attachment; filename={dataset.name.replace(' ','_')}_annotations.csv"})
+
+
+@router.get("/export/inferences/{model_id}")
+async def export_inferences_csv(
+    model_id: UUID, format: str = "csv",
+    db: AsyncSession = Depends(get_db), user=Depends(get_current_user),
+):
+    """Export inference history as CSV."""
+    from fastapi.responses import StreamingResponse
+    import csv, io
+
+    m = await db.execute(select(MLModel).where(MLModel.id == model_id))
+    model = m.scalar_one_or_none()
+    if not model:
+        raise HTTPException(404, "Model not found")
+
+    logs = await db.execute(select(InferenceLog).where(InferenceLog.model_id == model_id).order_by(InferenceLog.created_at.desc()))
+    all_logs = logs.scalars().all()
+
+    if format == "json":
+        return {"model": model.name, "total": len(all_logs),
+                "inferences": [{"verdict": l.verdict, "latency": l.latency_ms,
+                    "date": l.created_at.isoformat() if l.created_at else ""} for l in all_logs]}
+
+    output = io.StringIO()
+    w = csv.writer(output)
+    w.writerow(["timestamp", "verdict", "latency_ms", "detections"])
+    for l in all_logs:
+        dets = l.detections if isinstance(l.detections, list) else []
+        w.writerow([l.created_at.isoformat() if l.created_at else "", l.verdict, l.latency_ms,
+                    ";".join(f"{d.get('class','?')}({d.get('confidence',0):.0%})" for d in dets) if dets else "none"])
+    output.seek(0)
+    return StreamingResponse(iter([output.getvalue()]), media_type="text/csv",
+        headers={"Content-Disposition": f"attachment; filename={model.name}_inferences.csv"})
+
+
+@router.get("/export/dashboard")
+async def export_dashboard_csv(
+    days: int = 30, db: AsyncSession = Depends(get_db), user=Depends(get_current_user),
+):
+    """Export daily inspection summary as CSV for Excel charts."""
+    from fastapi.responses import StreamingResponse
+    from sqlalchemy import func as sqlfunc, and_
+    from datetime import datetime, timedelta
+    import csv, io
+
+    now = datetime.utcnow()
+    output = io.StringIO()
+    w = csv.writer(output)
+    w.writerow(["date", "day", "inspections", "defects", "ok", "defect_rate", "avg_latency_ms"])
+    for i in range(days):
+        day = now - timedelta(days=days-1-i)
+        ds = day.replace(hour=0, minute=0, second=0, microsecond=0)
+        de = ds + timedelta(days=1)
+        t = (await db.execute(select(sqlfunc.count(InferenceLog.id)).where(and_(InferenceLog.created_at >= ds, InferenceLog.created_at < de)))).scalar() or 0
+        d = (await db.execute(select(sqlfunc.count(InferenceLog.id)).where(and_(InferenceLog.created_at >= ds, InferenceLog.created_at < de, InferenceLog.verdict == "anomaly")))).scalar() or 0
+        lat = round((await db.execute(select(sqlfunc.avg(InferenceLog.latency_ms)).where(and_(InferenceLog.created_at >= ds, InferenceLog.created_at < de)))).scalar() or 0, 1)
+        w.writerow([ds.strftime("%Y-%m-%d"), ds.strftime("%A"), t, d, t-d, round(d/max(t,1)*100, 1), lat])
+    output.seek(0)
+    return StreamingResponse(iter([output.getvalue()]), media_type="text/csv",
+        headers={"Content-Disposition": "attachment; filename=vista_dashboard_export.csv"})
