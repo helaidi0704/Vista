@@ -2947,3 +2947,291 @@ async def segment_defects(
             "low": len([r for r in defect_regions if r["severity"] == "low"]),
         },
     }
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# AUDIT LOG — Track every action
+# ═══════════════════════════════════════════════════════════════════════════════
+
+@router.get("/audit-log")
+async def get_audit_log(
+    action: Optional[str] = None,
+    user_email: Optional[str] = None,
+    days: int = 7,
+    page: int = 1,
+    per_page: int = 50,
+    db: AsyncSession = Depends(get_db),
+    user=Depends(get_current_user),
+):
+    """
+    View the audit log — every action tracked with who, what, when.
+    Required for ISO 9001 compliance and security audits.
+    Filterable by action type, user, and time range.
+    """
+    from sqlalchemy import text, and_
+    from datetime import datetime, timedelta
+
+    # Create audit_logs table if not exists
+    await db.execute(text("""
+        CREATE TABLE IF NOT EXISTS audit_logs (
+            id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+            user_id UUID,
+            user_email VARCHAR(255),
+            user_role VARCHAR(50),
+            organization_id UUID,
+            action VARCHAR(100) NOT NULL,
+            resource_type VARCHAR(100),
+            resource_id VARCHAR(255),
+            details JSONB DEFAULT '{}',
+            ip_address VARCHAR(50),
+            created_at TIMESTAMPTZ DEFAULT NOW()
+        )
+    """))
+    await db.execute(text("""
+        CREATE INDEX IF NOT EXISTS idx_audit_created ON audit_logs(created_at DESC)
+    """))
+
+    since = datetime.utcnow() - timedelta(days=days)
+    org_id = user.get("organization_id") if user else None
+
+    # Build query
+    where_clauses = ["created_at >= :since"]
+    params = {"since": since}
+
+    if org_id:
+        where_clauses.append("organization_id = :org")
+        params["org"] = str(org_id)
+    if action:
+        where_clauses.append("action = :action")
+        params["action"] = action
+    if user_email:
+        where_clauses.append("user_email LIKE :email")
+        params["email"] = f"%{user_email}%"
+
+    where_sql = " AND ".join(where_clauses)
+
+    # Count
+    count_result = await db.execute(text(f"SELECT COUNT(*) FROM audit_logs WHERE {where_sql}"), params)
+    total = count_result.scalar() or 0
+
+    # Fetch page
+    offset = (page - 1) * per_page
+    result = await db.execute(text(
+        f"SELECT * FROM audit_logs WHERE {where_sql} ORDER BY created_at DESC LIMIT :lim OFFSET :off"
+    ), {**params, "lim": per_page, "off": offset})
+    logs = [dict(r) for r in result.mappings().fetchall()]
+
+    # Summary
+    summary_result = await db.execute(text(
+        f"SELECT action, COUNT(*) as count FROM audit_logs WHERE {where_sql} GROUP BY action ORDER BY count DESC"
+    ), params)
+    action_summary = {r["action"]: r["count"] for r in summary_result.mappings().fetchall()}
+
+    return {
+        "total": total,
+        "page": page,
+        "per_page": per_page,
+        "total_pages": (total + per_page - 1) // per_page,
+        "filters": {"action": action, "user_email": user_email, "days": days},
+        "action_summary": action_summary,
+        "logs": logs,
+    }
+
+
+@router.post("/audit-log")
+async def create_audit_entry(
+    action: str,
+    resource_type: str = "",
+    resource_id: str = "",
+    details: dict = {},
+    db: AsyncSession = Depends(get_db),
+    user=Depends(get_current_user),
+):
+    """
+    Manually create an audit log entry.
+    Most entries are created automatically by the system.
+    """
+    from sqlalchemy import text
+
+    await db.execute(text("""
+        CREATE TABLE IF NOT EXISTS audit_logs (
+            id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+            user_id UUID, user_email VARCHAR(255), user_role VARCHAR(50),
+            organization_id UUID, action VARCHAR(100) NOT NULL,
+            resource_type VARCHAR(100), resource_id VARCHAR(255),
+            details JSONB DEFAULT '{}', ip_address VARCHAR(50),
+            created_at TIMESTAMPTZ DEFAULT NOW()
+        )
+    """))
+
+    entry_id = str(__import__("uuid").uuid4())
+    await db.execute(text("""
+        INSERT INTO audit_logs (id, user_id, user_email, user_role, organization_id, action, resource_type, resource_id, details)
+        VALUES (:id, :uid, :email, :role, :org, :action, :rtype, :rid, :details)
+    """), {
+        "id": entry_id,
+        "uid": user.get("id") if user else None,
+        "email": user.get("email") if user else "system",
+        "role": user.get("role") if user else "system",
+        "org": user.get("organization_id") if user else None,
+        "action": action,
+        "rtype": resource_type,
+        "rid": resource_id,
+        "details": json.dumps(details),
+    })
+
+    return {"id": entry_id, "action": action, "message": "Audit entry created"}
+
+
+@router.get("/audit-log/actions")
+async def list_audit_actions(
+    db: AsyncSession = Depends(get_db),
+    user=Depends(get_current_user),
+):
+    """List all unique action types in the audit log."""
+    from sqlalchemy import text
+    try:
+        result = await db.execute(text(
+            "SELECT DISTINCT action, COUNT(*) as count FROM audit_logs GROUP BY action ORDER BY count DESC"
+        ))
+        return [{"action": r["action"], "count": r["count"]} for r in result.mappings().fetchall()]
+    except Exception:
+        return []
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# ROLE-BASED UI — Different views per role
+# ═══════════════════════════════════════════════════════════════════════════════
+
+@router.get("/ui/config")
+async def get_ui_config(
+    db: AsyncSession = Depends(get_db),
+    user=Depends(get_current_user),
+):
+    """
+    Returns UI configuration based on user role.
+    Operator: simple pass/fail screen, inference only
+    Engineer: full tools — annotation, training, testing, deployment
+    Manager/Admin: dashboards, reports, user management, audit log
+    Client: read-only viewer, testing, reports
+
+    The frontend uses this to show/hide menu items and features.
+    """
+    role = user.get("role", "client") if user else "client"
+
+    # Define permissions per role
+    role_configs = {
+        "admin": {
+            "role": "admin",
+            "label": "Administrateur",
+            "nav": ["home", "viewer", "analysis", "training", "testing", "deployment"],
+            "features": {
+                "can_annotate": True,
+                "can_train": True,
+                "can_deploy": True,
+                "can_manage_users": True,
+                "can_manage_org": True,
+                "can_view_audit": True,
+                "can_export": True,
+                "can_configure_webhooks": True,
+                "can_ab_test": True,
+                "can_retrain": True,
+                "can_delete": True,
+                "can_batch_inference": True,
+                "can_segment": True,
+            },
+            "dashboard_widgets": ["kpis", "defect_rate", "model_performance", "hourly_trend", "audit_recent", "user_activity"],
+            "default_page": "/",
+        },
+        "engineer": {
+            "role": "engineer",
+            "label": "Ingénieur Qualité",
+            "nav": ["home", "viewer", "analysis", "training", "testing", "deployment"],
+            "features": {
+                "can_annotate": True,
+                "can_train": True,
+                "can_deploy": True,
+                "can_manage_users": False,
+                "can_manage_org": False,
+                "can_view_audit": True,
+                "can_export": True,
+                "can_configure_webhooks": True,
+                "can_ab_test": True,
+                "can_retrain": True,
+                "can_delete": False,
+                "can_batch_inference": True,
+                "can_segment": True,
+            },
+            "dashboard_widgets": ["kpis", "defect_rate", "model_performance", "hourly_trend"],
+            "default_page": "/viewer",
+        },
+        "operator": {
+            "role": "operator",
+            "label": "Opérateur",
+            "nav": ["home", "testing"],
+            "features": {
+                "can_annotate": False,
+                "can_train": False,
+                "can_deploy": False,
+                "can_manage_users": False,
+                "can_manage_org": False,
+                "can_view_audit": False,
+                "can_export": False,
+                "can_configure_webhooks": False,
+                "can_ab_test": False,
+                "can_retrain": False,
+                "can_delete": False,
+                "can_batch_inference": True,
+                "can_segment": False,
+            },
+            "dashboard_widgets": ["pass_fail_big", "defect_count_today"],
+            "default_page": "/testing",
+            "simplified_ui": True,
+        },
+        "client": {
+            "role": "client",
+            "label": "Client",
+            "nav": ["home", "viewer", "testing", "deployment"],
+            "features": {
+                "can_annotate": True,
+                "can_train": False,
+                "can_deploy": False,
+                "can_manage_users": False,
+                "can_manage_org": False,
+                "can_view_audit": False,
+                "can_export": True,
+                "can_configure_webhooks": False,
+                "can_ab_test": False,
+                "can_retrain": False,
+                "can_delete": False,
+                "can_batch_inference": True,
+                "can_segment": True,
+            },
+            "dashboard_widgets": ["kpis", "defect_rate"],
+            "default_page": "/viewer",
+        },
+    }
+
+    config = role_configs.get(role, role_configs["client"])
+
+    # Add org info
+    org = None
+    if user and user.get("organization_id"):
+        from sqlalchemy import text
+        org_result = await db.execute(
+            text("SELECT name, plan, max_images, max_models, max_users FROM organizations WHERE id = :id"),
+            {"id": str(user["organization_id"])}
+        )
+        org_row = org_result.mappings().fetchone()
+        if org_row:
+            org = dict(org_row)
+
+    return {
+        "user": {
+            "email": user.get("email") if user else None,
+            "full_name": user.get("full_name") if user else None,
+            "role": role,
+        },
+        "organization": org,
+        "ui": config,
+    }
