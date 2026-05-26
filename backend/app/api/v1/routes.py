@@ -1463,3 +1463,1250 @@ async def export_dashboard_csv(
     output.seek(0)
     return StreamingResponse(iter([output.getvalue()]), media_type="text/csv",
         headers={"Content-Disposition": "attachment; filename=vista_dashboard_export.csv"})
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# DEFECT HEATMAP PER BATCH
+# ═══════════════════════════════════════════════════════════════════════════════
+
+@router.get("/heatmap/defects/{dataset_id}")
+async def defect_heatmap(
+    dataset_id: UUID,
+    width: int = 512,
+    height: int = 512,
+    db: AsyncSession = Depends(get_db),
+    user=Depends(get_current_user),
+):
+    """
+    Generate a defect density heatmap for a dataset.
+    Shows where defects appear most frequently on the part geometry.
+    If 70% of porosity is in upper-left, the mold has a problem there.
+    Turns VISTA from detection tool into diagnostic tool.
+    """
+    import numpy as np
+    import cv2
+    import base64
+
+    # Get all annotations for this dataset
+    imgs = await db.execute(select(Image).where(Image.dataset_id == dataset_id))
+    image_ids = [str(i.id) for i in imgs.scalars().all()]
+    if not image_ids:
+        raise HTTPException(404, "No images in dataset")
+
+    anns = await db.execute(
+        select(Annotation).where(Annotation.image_id.in_(image_ids))
+    )
+    annotations = anns.scalars().all()
+    if not annotations:
+        return {"message": "No annotations found", "heatmap_b64": None}
+
+    # Build density map
+    density = np.zeros((height, width), dtype=np.float32)
+
+    class_density = {}
+    for ann in annotations:
+        coords = ann.coordinates if isinstance(ann.coordinates, dict) else {}
+        nx = coords.get("nx", 0)
+        ny = coords.get("ny", 0)
+        nw = coords.get("nw", 0.1)
+        nh = coords.get("nh", 0.1)
+
+        x1 = int(nx * width)
+        y1 = int(ny * height)
+        x2 = int((nx + nw) * width)
+        y2 = int((ny + nh) * height)
+        x1, y1 = max(0, x1), max(0, y1)
+        x2, y2 = min(width, x2), min(height, y2)
+
+        density[y1:y2, x1:x2] += 1.0
+
+        cls = ann.defect_class
+        if cls not in class_density:
+            class_density[cls] = np.zeros((height, width), dtype=np.float32)
+        class_density[cls][y1:y2, x1:x2] += 1.0
+
+    # Normalize and colorize
+    if density.max() > 0:
+        density_norm = (density / density.max() * 255).astype(np.uint8)
+    else:
+        density_norm = density.astype(np.uint8)
+
+    heatmap = cv2.applyColorMap(density_norm, cv2.COLORMAP_JET)
+    _, buf = cv2.imencode(".png", heatmap)
+    heatmap_b64 = base64.b64encode(buf).decode()
+
+    # Find hotspots (zones with highest density)
+    hotspots = []
+    thresh = density.max() * 0.5
+    if thresh > 0:
+        binary = (density > thresh).astype(np.uint8) * 255
+        contours, _ = cv2.findContours(binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        for c in contours:
+            if cv2.contourArea(c) < 100:
+                continue
+            x, y, w, h = cv2.boundingRect(c)
+            hotspots.append({
+                "bbox": [x, y, x+w, y+h],
+                "center": [x + w//2, y + h//2],
+                "intensity": round(float(density[y:y+h, x:x+w].mean()), 2),
+                "area_percent": round(cv2.contourArea(c) / (width * height) * 100, 1),
+            })
+
+    # Per-class summary
+    class_summary = {}
+    for cls, dens in class_density.items():
+        total = float(dens.sum())
+        if total > 0:
+            ys, xs = np.where(dens > 0)
+            class_summary[cls] = {
+                "count": int(len([a for a in annotations if a.defect_class == cls])),
+                "center_of_mass": [int(xs.mean()), int(ys.mean())],
+                "spread_percent": round(np.count_nonzero(dens) / (width * height) * 100, 1),
+            }
+
+    return {
+        "dataset_id": str(dataset_id),
+        "total_annotations": len(annotations),
+        "image_size": {"width": width, "height": height},
+        "heatmap_b64": heatmap_b64,
+        "hotspots": sorted(hotspots, key=lambda h: h["intensity"], reverse=True),
+        "class_summary": class_summary,
+        "diagnostic": f"{len(hotspots)} hotspot(s) detected — check mold/tooling in those zones" if hotspots else "Defects evenly distributed — no tooling issue detected",
+    }
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# WEBHOOK / API CALLBACKS
+# ═══════════════════════════════════════════════════════════════════════════════
+
+@router.post("/webhooks")
+async def create_webhook(
+    url: str,
+    event: str = "defect_detected",
+    name: str = "My Webhook",
+    db: AsyncSession = Depends(get_db),
+    user=Depends(get_current_user),
+):
+    """
+    Register a webhook. VISTA calls this URL when events occur.
+    Events: defect_detected, training_completed, drift_alert, batch_complete.
+    Integration with Slack, Teams, ERP, PLC systems.
+    """
+    from sqlalchemy import text
+    webhook_id = str(__import__("uuid").uuid4())
+    org_id = user.get("organization_id") if user else None
+
+    await db.execute(text("""
+        CREATE TABLE IF NOT EXISTS webhooks (
+            id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+            name VARCHAR(255),
+            url VARCHAR(1024) NOT NULL,
+            event VARCHAR(100) NOT NULL,
+            organization_id UUID,
+            is_active BOOLEAN DEFAULT true,
+            secret VARCHAR(255),
+            created_at TIMESTAMPTZ DEFAULT NOW()
+        )
+    """))
+
+    await db.execute(text("""
+        INSERT INTO webhooks (id, name, url, event, organization_id)
+        VALUES (:id, :name, :url, :event, :org)
+    """), {"id": webhook_id, "name": name, "url": url, "event": event, "org": org_id})
+
+    return {
+        "id": webhook_id,
+        "name": name,
+        "url": url,
+        "event": event,
+        "message": f"Webhook registered — VISTA will POST to {url} on '{event}' events",
+    }
+
+
+@router.get("/webhooks")
+async def list_webhooks(
+    db: AsyncSession = Depends(get_db),
+    user=Depends(get_current_user),
+):
+    """List all registered webhooks."""
+    from sqlalchemy import text
+    try:
+        result = await db.execute(text("SELECT id, name, url, event, is_active, created_at FROM webhooks ORDER BY created_at DESC"))
+        return [dict(r) for r in result.mappings().fetchall()]
+    except Exception:
+        return []
+
+
+@router.delete("/webhooks/{webhook_id}")
+async def delete_webhook(
+    webhook_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    user=Depends(get_current_user),
+):
+    """Delete a webhook."""
+    from sqlalchemy import text
+    await db.execute(text("DELETE FROM webhooks WHERE id = :id"), {"id": str(webhook_id)})
+    return {"message": "Webhook deleted"}
+
+
+@router.post("/webhooks/test/{webhook_id}")
+async def test_webhook(
+    webhook_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    user=Depends(get_current_user),
+):
+    """Send a test payload to a webhook URL."""
+    import requests as req
+    from sqlalchemy import text
+    from datetime import datetime
+
+    result = await db.execute(text("SELECT url, event FROM webhooks WHERE id = :id"), {"id": str(webhook_id)})
+    wh = result.mappings().fetchone()
+    if not wh:
+        raise HTTPException(404, "Webhook not found")
+
+    payload = {
+        "event": wh["event"],
+        "timestamp": datetime.utcnow().isoformat(),
+        "source": "VISTA",
+        "test": True,
+        "data": {
+            "message": "This is a test webhook from VISTA",
+            "verdict": "anomaly",
+            "confidence": 0.87,
+            "defect_class": "Porosité",
+        }
+    }
+
+    try:
+        resp = req.post(wh["url"], json=payload, timeout=5)
+        return {"status": resp.status_code, "success": resp.ok, "message": f"Webhook called — response: {resp.status_code}"}
+    except Exception as e:
+        return {"status": 0, "success": False, "message": f"Failed: {str(e)}"}
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# AUGMENTATION PREVIEW
+# ═══════════════════════════════════════════════════════════════════════════════
+
+@router.post("/augmentation/preview")
+async def augmentation_preview(
+    image: UploadFile = File(...),
+    flip_h: float = 0.5,
+    flip_v: float = 0.0,
+    rotation: float = 15.0,
+    brightness: float = 0.2,
+    noise: float = 0.1,
+    count: int = 6,
+):
+    """
+    Preview data augmentation on an image before training.
+    Shows what augmented images look like (rotated, flipped, color-shifted).
+    Engineers verify augmentations don't create unrealistic images.
+    Returns base64-encoded previews.
+    """
+    import numpy as np
+    import cv2
+    import base64
+    import random
+    from io import BytesIO
+    from PIL import Image as PILImage
+
+    img_bytes = await image.read()
+    img = np.array(PILImage.open(BytesIO(img_bytes)).convert("RGB"))
+    img_bgr = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
+    h, w = img_bgr.shape[:2]
+
+    previews = []
+    aug_names = []
+
+    for i in range(min(count, 9)):
+        augmented = img_bgr.copy()
+        applied = []
+
+        # Random horizontal flip
+        if random.random() < flip_h:
+            augmented = cv2.flip(augmented, 1)
+            applied.append("H-Flip")
+
+        # Random vertical flip
+        if random.random() < flip_v:
+            augmented = cv2.flip(augmented, 0)
+            applied.append("V-Flip")
+
+        # Random rotation
+        if rotation > 0:
+            angle = random.uniform(-rotation, rotation)
+            M = cv2.getRotationMatrix2D((w/2, h/2), angle, 1.0)
+            augmented = cv2.warpAffine(augmented, M, (w, h), borderMode=cv2.BORDER_REFLECT)
+            applied.append(f"Rot {angle:.0f}°")
+
+        # Random brightness
+        if brightness > 0:
+            factor = 1.0 + random.uniform(-brightness, brightness)
+            augmented = np.clip(augmented * factor, 0, 255).astype(np.uint8)
+            applied.append(f"Bright {factor:.2f}")
+
+        # Random Gaussian noise
+        if noise > 0 and random.random() < 0.5:
+            gauss = np.random.normal(0, noise * 255, augmented.shape).astype(np.int16)
+            augmented = np.clip(augmented.astype(np.int16) + gauss, 0, 255).astype(np.uint8)
+            applied.append("Noise")
+
+        # Add label to image
+        label = " + ".join(applied) if applied else "Original"
+        cv2.putText(augmented, label, (10, 25), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1)
+
+        _, buf = cv2.imencode(".jpg", augmented, [cv2.IMWRITE_JPEG_QUALITY, 85])
+        previews.append(base64.b64encode(buf).decode())
+        aug_names.append(label)
+
+    return {
+        "original_size": {"width": w, "height": h},
+        "augmentation_config": {
+            "flip_h": flip_h, "flip_v": flip_v,
+            "rotation": rotation, "brightness": brightness, "noise": noise,
+        },
+        "count": len(previews),
+        "previews": [{"index": i, "augmentations": aug_names[i], "image_b64": p} for i, p in enumerate(previews)],
+    }
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# IMAGE NAVIGATION — Defect Navigator
+# ═══════════════════════════════════════════════════════════════════════════════
+
+@router.get("/navigate/defects/{dataset_id}")
+async def navigate_defects(
+    dataset_id: UUID,
+    defect_class: Optional[str] = None,
+    severity: Optional[str] = None,
+    page: int = 1,
+    per_page: int = 20,
+    db: AsyncSession = Depends(get_db),
+    user=Depends(get_current_user),
+):
+    """
+    Defect navigator — browse through all annotated defects in a dataset.
+    Supports filtering by class and severity.
+    Returns image info + annotation details for each defect.
+    UI uses this for "Next defect" / "Previous defect" navigation.
+    """
+    from sqlalchemy import and_
+
+    # Get images in dataset
+    imgs = await db.execute(select(Image).where(Image.dataset_id == dataset_id))
+    image_map = {str(i.id): i for i in imgs.scalars().all()}
+    if not image_map:
+        raise HTTPException(404, "No images in dataset")
+
+    # Build annotation query with filters
+    query = select(Annotation).where(
+        Annotation.image_id.in_(list(image_map.keys()))
+    )
+    if defect_class:
+        query = query.where(Annotation.defect_class == defect_class)
+    if severity:
+        query = query.where(Annotation.severity == severity)
+    query = query.order_by(Annotation.created_at.desc())
+
+    # Count total
+    from sqlalchemy import func as sqlfunc
+    count_q = select(sqlfunc.count(Annotation.id)).where(
+        Annotation.image_id.in_(list(image_map.keys()))
+    )
+    if defect_class:
+        count_q = count_q.where(Annotation.defect_class == defect_class)
+    if severity:
+        count_q = count_q.where(Annotation.severity == severity)
+    total = (await db.execute(count_q)).scalar() or 0
+
+    # Paginate
+    offset = (page - 1) * per_page
+    query = query.offset(offset).limit(per_page)
+    anns = (await db.execute(query)).scalars().all()
+
+    # Build navigation list
+    defects = []
+    for ann in anns:
+        img = image_map.get(str(ann.image_id))
+        coords = ann.coordinates if isinstance(ann.coordinates, dict) else {}
+        defects.append({
+            "annotation_id": str(ann.id),
+            "image_id": str(ann.image_id),
+            "image_filename": img.filename if img else "unknown",
+            "defect_class": ann.defect_class,
+            "severity": ann.severity,
+            "description": ann.description,
+            "bbox": {
+                "x": coords.get("nx", 0),
+                "y": coords.get("ny", 0),
+                "w": coords.get("nw", 0),
+                "h": coords.get("nh", 0),
+            },
+            "created_at": ann.created_at.isoformat() if ann.created_at else None,
+        })
+
+    # Summary stats
+    all_anns = await db.execute(
+        select(Annotation.defect_class, sqlfunc.count(Annotation.id).label("count"))
+        .where(Annotation.image_id.in_(list(image_map.keys())))
+        .group_by(Annotation.defect_class)
+    )
+    class_counts = {r.defect_class: r.count for r in all_anns.fetchall()}
+
+    sev_anns = await db.execute(
+        select(Annotation.severity, sqlfunc.count(Annotation.id).label("count"))
+        .where(Annotation.image_id.in_(list(image_map.keys())))
+        .group_by(Annotation.severity)
+    )
+    severity_counts = {r.severity: r.count for r in sev_anns.fetchall()}
+
+    return {
+        "dataset_id": str(dataset_id),
+        "total_defects": total,
+        "page": page,
+        "per_page": per_page,
+        "total_pages": (total + per_page - 1) // per_page,
+        "defects": defects,
+        "filters": {
+            "classes": class_counts,
+            "severities": severity_counts,
+        },
+        "has_next": page * per_page < total,
+        "has_prev": page > 1,
+    }
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# DEFECT HEATMAP PER BATCH
+# ═══════════════════════════════════════════════════════════════════════════════
+
+@router.get("/heatmap/defects/{dataset_id}")
+async def defect_heatmap(
+    dataset_id: UUID,
+    width: int = 512,
+    height: int = 512,
+    db: AsyncSession = Depends(get_db),
+    user=Depends(get_current_user),
+):
+    """
+    Generate a defect density heatmap for a dataset.
+    Shows where defects appear most frequently on the part geometry.
+    If 70% of porosity is in upper-left, the mold has a problem there.
+    Turns VISTA from detection tool into diagnostic tool.
+    """
+    import numpy as np
+    import cv2
+    import base64
+
+    # Get all annotations for this dataset
+    imgs = await db.execute(select(Image).where(Image.dataset_id == dataset_id))
+    image_ids = [str(i.id) for i in imgs.scalars().all()]
+    if not image_ids:
+        raise HTTPException(404, "No images in dataset")
+
+    anns = await db.execute(
+        select(Annotation).where(Annotation.image_id.in_(image_ids))
+    )
+    annotations = anns.scalars().all()
+    if not annotations:
+        return {"message": "No annotations found", "heatmap_b64": None}
+
+    # Build density map
+    density = np.zeros((height, width), dtype=np.float32)
+
+    class_density = {}
+    for ann in annotations:
+        coords = ann.coordinates if isinstance(ann.coordinates, dict) else {}
+        nx = coords.get("nx", 0)
+        ny = coords.get("ny", 0)
+        nw = coords.get("nw", 0.1)
+        nh = coords.get("nh", 0.1)
+
+        x1 = int(nx * width)
+        y1 = int(ny * height)
+        x2 = int((nx + nw) * width)
+        y2 = int((ny + nh) * height)
+        x1, y1 = max(0, x1), max(0, y1)
+        x2, y2 = min(width, x2), min(height, y2)
+
+        density[y1:y2, x1:x2] += 1.0
+
+        cls = ann.defect_class
+        if cls not in class_density:
+            class_density[cls] = np.zeros((height, width), dtype=np.float32)
+        class_density[cls][y1:y2, x1:x2] += 1.0
+
+    # Normalize and colorize
+    if density.max() > 0:
+        density_norm = (density / density.max() * 255).astype(np.uint8)
+    else:
+        density_norm = density.astype(np.uint8)
+
+    heatmap = cv2.applyColorMap(density_norm, cv2.COLORMAP_JET)
+    _, buf = cv2.imencode(".png", heatmap)
+    heatmap_b64 = base64.b64encode(buf).decode()
+
+    # Find hotspots (zones with highest density)
+    hotspots = []
+    thresh = density.max() * 0.5
+    if thresh > 0:
+        binary = (density > thresh).astype(np.uint8) * 255
+        contours, _ = cv2.findContours(binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        for c in contours:
+            if cv2.contourArea(c) < 100:
+                continue
+            x, y, w, h = cv2.boundingRect(c)
+            hotspots.append({
+                "bbox": [x, y, x+w, y+h],
+                "center": [x + w//2, y + h//2],
+                "intensity": round(float(density[y:y+h, x:x+w].mean()), 2),
+                "area_percent": round(cv2.contourArea(c) / (width * height) * 100, 1),
+            })
+
+    # Per-class summary
+    class_summary = {}
+    for cls, dens in class_density.items():
+        total = float(dens.sum())
+        if total > 0:
+            ys, xs = np.where(dens > 0)
+            class_summary[cls] = {
+                "count": int(len([a for a in annotations if a.defect_class == cls])),
+                "center_of_mass": [int(xs.mean()), int(ys.mean())],
+                "spread_percent": round(np.count_nonzero(dens) / (width * height) * 100, 1),
+            }
+
+    return {
+        "dataset_id": str(dataset_id),
+        "total_annotations": len(annotations),
+        "image_size": {"width": width, "height": height},
+        "heatmap_b64": heatmap_b64,
+        "hotspots": sorted(hotspots, key=lambda h: h["intensity"], reverse=True),
+        "class_summary": class_summary,
+        "diagnostic": f"{len(hotspots)} hotspot(s) detected — check mold/tooling in those zones" if hotspots else "Defects evenly distributed — no tooling issue detected",
+    }
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# WEBHOOK / API CALLBACKS
+# ═══════════════════════════════════════════════════════════════════════════════
+
+@router.post("/webhooks")
+async def create_webhook(
+    url: str,
+    event: str = "defect_detected",
+    name: str = "My Webhook",
+    db: AsyncSession = Depends(get_db),
+    user=Depends(get_current_user),
+):
+    """
+    Register a webhook. VISTA calls this URL when events occur.
+    Events: defect_detected, training_completed, drift_alert, batch_complete.
+    Integration with Slack, Teams, ERP, PLC systems.
+    """
+    from sqlalchemy import text
+    webhook_id = str(__import__("uuid").uuid4())
+    org_id = user.get("organization_id") if user else None
+
+    await db.execute(text("""
+        CREATE TABLE IF NOT EXISTS webhooks (
+            id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+            name VARCHAR(255),
+            url VARCHAR(1024) NOT NULL,
+            event VARCHAR(100) NOT NULL,
+            organization_id UUID,
+            is_active BOOLEAN DEFAULT true,
+            secret VARCHAR(255),
+            created_at TIMESTAMPTZ DEFAULT NOW()
+        )
+    """))
+
+    await db.execute(text("""
+        INSERT INTO webhooks (id, name, url, event, organization_id)
+        VALUES (:id, :name, :url, :event, :org)
+    """), {"id": webhook_id, "name": name, "url": url, "event": event, "org": org_id})
+
+    return {
+        "id": webhook_id,
+        "name": name,
+        "url": url,
+        "event": event,
+        "message": f"Webhook registered — VISTA will POST to {url} on '{event}' events",
+    }
+
+
+@router.get("/webhooks")
+async def list_webhooks(
+    db: AsyncSession = Depends(get_db),
+    user=Depends(get_current_user),
+):
+    """List all registered webhooks."""
+    from sqlalchemy import text
+    try:
+        result = await db.execute(text("SELECT id, name, url, event, is_active, created_at FROM webhooks ORDER BY created_at DESC"))
+        return [dict(r) for r in result.mappings().fetchall()]
+    except Exception:
+        return []
+
+
+@router.delete("/webhooks/{webhook_id}")
+async def delete_webhook(
+    webhook_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    user=Depends(get_current_user),
+):
+    """Delete a webhook."""
+    from sqlalchemy import text
+    await db.execute(text("DELETE FROM webhooks WHERE id = :id"), {"id": str(webhook_id)})
+    return {"message": "Webhook deleted"}
+
+
+@router.post("/webhooks/test/{webhook_id}")
+async def test_webhook(
+    webhook_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    user=Depends(get_current_user),
+):
+    """Send a test payload to a webhook URL."""
+    import requests as req
+    from sqlalchemy import text
+    from datetime import datetime
+
+    result = await db.execute(text("SELECT url, event FROM webhooks WHERE id = :id"), {"id": str(webhook_id)})
+    wh = result.mappings().fetchone()
+    if not wh:
+        raise HTTPException(404, "Webhook not found")
+
+    payload = {
+        "event": wh["event"],
+        "timestamp": datetime.utcnow().isoformat(),
+        "source": "VISTA",
+        "test": True,
+        "data": {
+            "message": "This is a test webhook from VISTA",
+            "verdict": "anomaly",
+            "confidence": 0.87,
+            "defect_class": "Porosité",
+        }
+    }
+
+    try:
+        resp = req.post(wh["url"], json=payload, timeout=5)
+        return {"status": resp.status_code, "success": resp.ok, "message": f"Webhook called — response: {resp.status_code}"}
+    except Exception as e:
+        return {"status": 0, "success": False, "message": f"Failed: {str(e)}"}
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# AUGMENTATION PREVIEW
+# ═══════════════════════════════════════════════════════════════════════════════
+
+@router.post("/augmentation/preview")
+async def augmentation_preview(
+    image: UploadFile = File(...),
+    flip_h: float = 0.5,
+    flip_v: float = 0.0,
+    rotation: float = 15.0,
+    brightness: float = 0.2,
+    noise: float = 0.1,
+    count: int = 6,
+):
+    """
+    Preview data augmentation on an image before training.
+    Shows what augmented images look like (rotated, flipped, color-shifted).
+    Engineers verify augmentations don't create unrealistic images.
+    Returns base64-encoded previews.
+    """
+    import numpy as np
+    import cv2
+    import base64
+    import random
+    from io import BytesIO
+    from PIL import Image as PILImage
+
+    img_bytes = await image.read()
+    img = np.array(PILImage.open(BytesIO(img_bytes)).convert("RGB"))
+    img_bgr = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
+    h, w = img_bgr.shape[:2]
+
+    previews = []
+    aug_names = []
+
+    for i in range(min(count, 9)):
+        augmented = img_bgr.copy()
+        applied = []
+
+        # Random horizontal flip
+        if random.random() < flip_h:
+            augmented = cv2.flip(augmented, 1)
+            applied.append("H-Flip")
+
+        # Random vertical flip
+        if random.random() < flip_v:
+            augmented = cv2.flip(augmented, 0)
+            applied.append("V-Flip")
+
+        # Random rotation
+        if rotation > 0:
+            angle = random.uniform(-rotation, rotation)
+            M = cv2.getRotationMatrix2D((w/2, h/2), angle, 1.0)
+            augmented = cv2.warpAffine(augmented, M, (w, h), borderMode=cv2.BORDER_REFLECT)
+            applied.append(f"Rot {angle:.0f}°")
+
+        # Random brightness
+        if brightness > 0:
+            factor = 1.0 + random.uniform(-brightness, brightness)
+            augmented = np.clip(augmented * factor, 0, 255).astype(np.uint8)
+            applied.append(f"Bright {factor:.2f}")
+
+        # Random Gaussian noise
+        if noise > 0 and random.random() < 0.5:
+            gauss = np.random.normal(0, noise * 255, augmented.shape).astype(np.int16)
+            augmented = np.clip(augmented.astype(np.int16) + gauss, 0, 255).astype(np.uint8)
+            applied.append("Noise")
+
+        # Add label to image
+        label = " + ".join(applied) if applied else "Original"
+        cv2.putText(augmented, label, (10, 25), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1)
+
+        _, buf = cv2.imencode(".jpg", augmented, [cv2.IMWRITE_JPEG_QUALITY, 85])
+        previews.append(base64.b64encode(buf).decode())
+        aug_names.append(label)
+
+    return {
+        "original_size": {"width": w, "height": h},
+        "augmentation_config": {
+            "flip_h": flip_h, "flip_v": flip_v,
+            "rotation": rotation, "brightness": brightness, "noise": noise,
+        },
+        "count": len(previews),
+        "previews": [{"index": i, "augmentations": aug_names[i], "image_b64": p} for i, p in enumerate(previews)],
+    }
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# IMAGE NAVIGATION — Defect Navigator
+# ═══════════════════════════════════════════════════════════════════════════════
+
+@router.get("/navigate/defects/{dataset_id}")
+async def navigate_defects(
+    dataset_id: UUID,
+    defect_class: Optional[str] = None,
+    severity: Optional[str] = None,
+    page: int = 1,
+    per_page: int = 20,
+    db: AsyncSession = Depends(get_db),
+    user=Depends(get_current_user),
+):
+    """
+    Defect navigator — browse through all annotated defects in a dataset.
+    Supports filtering by class and severity.
+    Returns image info + annotation details for each defect.
+    UI uses this for "Next defect" / "Previous defect" navigation.
+    """
+    from sqlalchemy import and_
+
+    # Get images in dataset
+    imgs = await db.execute(select(Image).where(Image.dataset_id == dataset_id))
+    image_map = {str(i.id): i for i in imgs.scalars().all()}
+    if not image_map:
+        raise HTTPException(404, "No images in dataset")
+
+    # Build annotation query with filters
+    query = select(Annotation).where(
+        Annotation.image_id.in_(list(image_map.keys()))
+    )
+    if defect_class:
+        query = query.where(Annotation.defect_class == defect_class)
+    if severity:
+        query = query.where(Annotation.severity == severity)
+    query = query.order_by(Annotation.created_at.desc())
+
+    # Count total
+    from sqlalchemy import func as sqlfunc
+    count_q = select(sqlfunc.count(Annotation.id)).where(
+        Annotation.image_id.in_(list(image_map.keys()))
+    )
+    if defect_class:
+        count_q = count_q.where(Annotation.defect_class == defect_class)
+    if severity:
+        count_q = count_q.where(Annotation.severity == severity)
+    total = (await db.execute(count_q)).scalar() or 0
+
+    # Paginate
+    offset = (page - 1) * per_page
+    query = query.offset(offset).limit(per_page)
+    anns = (await db.execute(query)).scalars().all()
+
+    # Build navigation list
+    defects = []
+    for ann in anns:
+        img = image_map.get(str(ann.image_id))
+        coords = ann.coordinates if isinstance(ann.coordinates, dict) else {}
+        defects.append({
+            "annotation_id": str(ann.id),
+            "image_id": str(ann.image_id),
+            "image_filename": img.filename if img else "unknown",
+            "defect_class": ann.defect_class,
+            "severity": ann.severity,
+            "description": ann.description,
+            "bbox": {
+                "x": coords.get("nx", 0),
+                "y": coords.get("ny", 0),
+                "w": coords.get("nw", 0),
+                "h": coords.get("nh", 0),
+            },
+            "created_at": ann.created_at.isoformat() if ann.created_at else None,
+        })
+
+    # Summary stats
+    all_anns = await db.execute(
+        select(Annotation.defect_class, sqlfunc.count(Annotation.id).label("count"))
+        .where(Annotation.image_id.in_(list(image_map.keys())))
+        .group_by(Annotation.defect_class)
+    )
+    class_counts = {r.defect_class: r.count for r in all_anns.fetchall()}
+
+    sev_anns = await db.execute(
+        select(Annotation.severity, sqlfunc.count(Annotation.id).label("count"))
+        .where(Annotation.image_id.in_(list(image_map.keys())))
+        .group_by(Annotation.severity)
+    )
+    severity_counts = {r.severity: r.count for r in sev_anns.fetchall()}
+
+    return {
+        "dataset_id": str(dataset_id),
+        "total_defects": total,
+        "page": page,
+        "per_page": per_page,
+        "total_pages": (total + per_page - 1) // per_page,
+        "defects": defects,
+        "filters": {
+            "classes": class_counts,
+            "severities": severity_counts,
+        },
+        "has_next": page * per_page < total,
+        "has_prev": page > 1,
+    }
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# MODEL A/B TESTING
+# ═══════════════════════════════════════════════════════════════════════════════
+
+@router.post("/ab-test/create")
+async def create_ab_test(
+    model_a_id: UUID,
+    model_b_id: UUID,
+    name: str = "A/B Test",
+    split_ratio: float = 0.5,
+    db: AsyncSession = Depends(get_db),
+    user=Depends(get_current_user),
+):
+    """
+    Create an A/B test between two models.
+    Images are randomly routed: split_ratio to Model A, rest to Model B.
+    After enough samples, compare which model performs better.
+    """
+    from sqlalchemy import text
+
+    # Verify both models exist
+    ma = await db.execute(select(MLModel).where(MLModel.id == model_a_id))
+    mb = await db.execute(select(MLModel).where(MLModel.id == model_b_id))
+    model_a = ma.scalar_one_or_none()
+    model_b = mb.scalar_one_or_none()
+    if not model_a or not model_b:
+        raise HTTPException(404, "One or both models not found")
+
+    # Create ab_tests table if not exists
+    await db.execute(text("""
+        CREATE TABLE IF NOT EXISTS ab_tests (
+            id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+            name VARCHAR(255),
+            model_a_id UUID NOT NULL,
+            model_b_id UUID NOT NULL,
+            split_ratio FLOAT DEFAULT 0.5,
+            status VARCHAR(20) DEFAULT 'active',
+            organization_id UUID,
+            created_at TIMESTAMPTZ DEFAULT NOW()
+        )
+    """))
+    await db.execute(text("""
+        CREATE TABLE IF NOT EXISTS ab_test_results (
+            id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+            ab_test_id UUID NOT NULL,
+            model_id UUID NOT NULL,
+            image_filename VARCHAR(512),
+            verdict VARCHAR(20),
+            detections_count INTEGER DEFAULT 0,
+            confidence_avg FLOAT,
+            latency_ms FLOAT,
+            created_at TIMESTAMPTZ DEFAULT NOW()
+        )
+    """))
+
+    test_id = str(__import__("uuid").uuid4())
+    org_id = user.get("organization_id") if user else None
+    await db.execute(text("""
+        INSERT INTO ab_tests (id, name, model_a_id, model_b_id, split_ratio, organization_id)
+        VALUES (:id, :name, :a, :b, :ratio, :org)
+    """), {"id": test_id, "name": name, "a": str(model_a_id), "b": str(model_b_id), "ratio": split_ratio, "org": org_id})
+
+    return {
+        "id": test_id,
+        "name": name,
+        "model_a": {"id": str(model_a.id), "name": model_a.name, "map50": model_a.map50},
+        "model_b": {"id": str(model_b.id), "name": model_b.name, "map50": model_b.map50},
+        "split_ratio": split_ratio,
+        "status": "active",
+        "message": f"A/B test created — {split_ratio:.0%} to {model_a.name}, {1-split_ratio:.0%} to {model_b.name}",
+    }
+
+
+@router.post("/ab-test/{test_id}/run")
+async def run_ab_test_inference(
+    test_id: UUID,
+    image: UploadFile = File(...),
+    db: AsyncSession = Depends(get_db),
+    user=Depends(get_current_user),
+):
+    """
+    Run inference through the A/B test.
+    Randomly routes to Model A or B based on split ratio.
+    Records results for comparison.
+    """
+    import random
+    import base64
+    from sqlalchemy import text
+
+    # Get test config
+    result = await db.execute(text("SELECT * FROM ab_tests WHERE id = :id"), {"id": str(test_id)})
+    test = result.mappings().fetchone()
+    if not test:
+        raise HTTPException(404, "A/B test not found")
+
+    # Choose model based on split ratio
+    use_a = random.random() < test["split_ratio"]
+    chosen_model_id = str(test["model_a_id"] if use_a else test["model_b_id"])
+    chosen_label = "A" if use_a else "B"
+
+    # Run inference
+    image_bytes = await image.read()
+    image_b64 = base64.b64encode(image_bytes).decode()
+
+    task = celery_app.send_task(
+        "tasks.run_inference",
+        args=[chosen_model_id, image_b64, False],
+        queue="gpu",
+    )
+    inf_result = task.get(timeout=120)
+
+    detections = inf_result.get("detections", [])
+    avg_conf = sum(d["confidence"] for d in detections) / len(detections) if detections else 0
+
+    # Record result
+    await db.execute(text("""
+        INSERT INTO ab_test_results (ab_test_id, model_id, image_filename, verdict, detections_count, confidence_avg, latency_ms)
+        VALUES (:tid, :mid, :fname, :verdict, :dets, :conf, :lat)
+    """), {
+        "tid": str(test_id), "mid": chosen_model_id, "fname": image.filename,
+        "verdict": inf_result.get("verdict", "ok"), "dets": len(detections),
+        "conf": round(avg_conf, 4), "lat": inf_result.get("latency_ms", 0),
+    })
+
+    return {
+        "ab_test_id": str(test_id),
+        "routed_to": f"Model {chosen_label}",
+        "model_id": chosen_model_id,
+        "verdict": inf_result.get("verdict", "ok"),
+        "detections": detections,
+        "latency_ms": inf_result.get("latency_ms", 0),
+    }
+
+
+@router.get("/ab-test/{test_id}/results")
+async def get_ab_test_results(
+    test_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    user=Depends(get_current_user),
+):
+    """
+    Get A/B test comparison results.
+    Shows per-model stats: total inferences, defect rate, avg confidence,
+    avg latency, and a recommendation of which model to promote.
+    """
+    from sqlalchemy import text
+
+    # Get test info
+    test = (await db.execute(text("SELECT * FROM ab_tests WHERE id = :id"), {"id": str(test_id)})).mappings().fetchone()
+    if not test:
+        raise HTTPException(404, "A/B test not found")
+
+    # Get model names
+    ma = await db.execute(select(MLModel).where(MLModel.id == test["model_a_id"]))
+    mb = await db.execute(select(MLModel).where(MLModel.id == test["model_b_id"]))
+    model_a = ma.scalar_one_or_none()
+    model_b = mb.scalar_one_or_none()
+
+    # Aggregate results per model
+    stats = {}
+    for label, mid in [("A", str(test["model_a_id"])), ("B", str(test["model_b_id"]))]:
+        r = await db.execute(text("""
+            SELECT COUNT(*) as total,
+                   COUNT(*) FILTER (WHERE verdict = 'anomaly') as anomalies,
+                   AVG(confidence_avg) as avg_conf,
+                   AVG(latency_ms) as avg_lat,
+                   AVG(detections_count) as avg_dets
+            FROM ab_test_results WHERE ab_test_id = :tid AND model_id = :mid
+        """), {"tid": str(test_id), "mid": mid})
+        row = r.mappings().fetchone()
+        total = row["total"] or 0
+        stats[label] = {
+            "model_id": mid,
+            "model_name": (model_a.name if label == "A" else model_b.name) if (model_a and model_b) else mid,
+            "total_inferences": total,
+            "anomalies": row["anomalies"] or 0,
+            "defect_rate": round((row["anomalies"] or 0) / max(total, 1) * 100, 1),
+            "avg_confidence": round(row["avg_conf"] or 0, 3),
+            "avg_latency_ms": round(row["avg_lat"] or 0, 1),
+            "avg_detections": round(row["avg_dets"] or 0, 2),
+        }
+
+    # Recommendation
+    total_samples = stats["A"]["total_inferences"] + stats["B"]["total_inferences"]
+    recommendation = "Need more data (minimum 50 samples per model)" if total_samples < 100 else None
+    if total_samples >= 100:
+        score_a = stats["A"]["avg_confidence"] * 100 - stats["A"]["avg_latency_ms"] * 0.01
+        score_b = stats["B"]["avg_confidence"] * 100 - stats["B"]["avg_latency_ms"] * 0.01
+        winner = "A" if score_a > score_b else "B"
+        recommendation = f"Model {winner} ({stats[winner]['model_name']}) performs better — promote to production"
+
+    return {
+        "ab_test_id": str(test_id),
+        "name": test["name"],
+        "status": test["status"],
+        "total_inferences": total_samples,
+        "model_a": stats["A"],
+        "model_b": stats["B"],
+        "recommendation": recommendation,
+    }
+
+
+@router.get("/ab-test")
+async def list_ab_tests(
+    db: AsyncSession = Depends(get_db),
+    user=Depends(get_current_user),
+):
+    """List all A/B tests."""
+    from sqlalchemy import text
+    try:
+        result = await db.execute(text("SELECT id, name, model_a_id, model_b_id, split_ratio, status, created_at FROM ab_tests ORDER BY created_at DESC"))
+        return [dict(r) for r in result.mappings().fetchall()]
+    except Exception:
+        return []
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# BATCH INFERENCE
+# ═══════════════════════════════════════════════════════════════════════════════
+
+@router.post("/inference/batch")
+async def batch_inference(
+    model_id: UUID,
+    images: list[UploadFile] = File(...),
+    db: AsyncSession = Depends(get_db),
+    user=Depends(get_current_user),
+):
+    """
+    Batch inference — upload multiple images at once.
+    Returns results for all images with summary statistics.
+    Useful for end-of-shift batch inspection of 50-500 parts.
+    """
+    import base64
+
+    if len(images) > 100:
+        raise HTTPException(400, "Maximum 100 images per batch")
+
+    # Verify model exists
+    m = await db.execute(select(MLModel).where(MLModel.id == model_id))
+    model = m.scalar_one_or_none()
+    if not model:
+        raise HTTPException(404, "Model not found")
+
+    results = []
+    total_ok = 0
+    total_anomaly = 0
+    total_latency = 0
+
+    for img in images:
+        try:
+            img_bytes = await img.read()
+            img_b64 = base64.b64encode(img_bytes).decode()
+
+            task = celery_app.send_task(
+                "tasks.run_inference",
+                args=[str(model_id), img_b64, False],
+                queue="gpu",
+            )
+            inf_result = task.get(timeout=120)
+
+            verdict = inf_result.get("verdict", "ok")
+            latency = inf_result.get("latency_ms", 0)
+            detections = inf_result.get("detections", [])
+
+            if verdict == "ok":
+                total_ok += 1
+            else:
+                total_anomaly += 1
+            total_latency += latency
+
+            results.append({
+                "filename": img.filename,
+                "verdict": verdict,
+                "detections": len(detections),
+                "details": detections,
+                "latency_ms": round(latency, 1),
+            })
+
+            # Log to database
+            log = InferenceLog(
+                model_id=model_id,
+                input_image_path=img.filename,
+                detections=detections,
+                verdict=verdict,
+                latency_ms=latency,
+            )
+            if user and user.get("id"):
+                log.user_id = user["id"]
+            if user and user.get("organization_id"):
+                log.organization_id = user["organization_id"]
+            db.add(log)
+
+        except Exception as e:
+            results.append({
+                "filename": img.filename,
+                "verdict": "error",
+                "detections": 0,
+                "details": [],
+                "latency_ms": 0,
+                "error": str(e),
+            })
+
+    await db.flush()
+
+    total = len(results)
+    errors = len([r for r in results if r["verdict"] == "error"])
+
+    return {
+        "model": {"id": str(model.id), "name": model.name},
+        "batch_size": total,
+        "summary": {
+            "ok": total_ok,
+            "anomaly": total_anomaly,
+            "errors": errors,
+            "pass_rate": round(total_ok / max(total - errors, 1) * 100, 1),
+            "defect_rate": round(total_anomaly / max(total - errors, 1) * 100, 1),
+            "avg_latency_ms": round(total_latency / max(total, 1), 1),
+            "total_defects_found": sum(r["detections"] for r in results),
+        },
+        "results": results,
+    }
+
+
+@router.post("/inference/batch-dataset/{dataset_id}")
+async def batch_inference_dataset(
+    dataset_id: UUID,
+    model_id: UUID,
+    limit: int = 50,
+    db: AsyncSession = Depends(get_db),
+    user=Depends(get_current_user),
+):
+    """
+    Run batch inference on images from an existing dataset.
+    No upload needed — uses images already in MinIO.
+    Great for validating a model on the full test set.
+    """
+    import base64
+
+    # Get images
+    imgs = await db.execute(
+        select(Image).where(Image.dataset_id == dataset_id).order_by(Image.uploaded_at).limit(limit)
+    )
+    images = imgs.scalars().all()
+    if not images:
+        raise HTTPException(404, "No images in dataset")
+
+    # Get model
+    m = await db.execute(select(MLModel).where(MLModel.id == model_id))
+    model = m.scalar_one_or_none()
+    if not model:
+        raise HTTPException(404, "Model not found")
+
+    from app.core.storage import get_s3_client
+    s3 = get_s3_client()
+    bucket = settings.minio_bucket_images
+
+    results = []
+    total_ok = 0
+    total_anomaly = 0
+    total_latency = 0
+
+    for img in images:
+        try:
+            # Download from MinIO
+            response = s3.get_object(Bucket=bucket, Key=img.storage_path)
+            img_bytes = response["Body"].read()
+            img_b64 = base64.b64encode(img_bytes).decode()
+
+            task = celery_app.send_task(
+                "tasks.run_inference",
+                args=[str(model_id), img_b64, False],
+                queue="gpu",
+            )
+            inf_result = task.get(timeout=120)
+
+            verdict = inf_result.get("verdict", "ok")
+            latency = inf_result.get("latency_ms", 0)
+            detections = inf_result.get("detections", [])
+
+            if verdict == "ok":
+                total_ok += 1
+            else:
+                total_anomaly += 1
+            total_latency += latency
+
+            results.append({
+                "filename": img.filename,
+                "image_id": str(img.id),
+                "verdict": verdict,
+                "detections": len(detections),
+                "details": detections,
+                "latency_ms": round(latency, 1),
+            })
+
+        except Exception as e:
+            results.append({
+                "filename": img.filename,
+                "image_id": str(img.id),
+                "verdict": "error",
+                "error": str(e),
+            })
+
+    total = len(results)
+    errors = len([r for r in results if r["verdict"] == "error"])
+
+    return {
+        "model": {"id": str(model.id), "name": model.name},
+        "dataset": dataset_id,
+        "batch_size": total,
+        "summary": {
+            "ok": total_ok,
+            "anomaly": total_anomaly,
+            "errors": errors,
+            "pass_rate": round(total_ok / max(total - errors, 1) * 100, 1),
+            "defect_rate": round(total_anomaly / max(total - errors, 1) * 100, 1),
+            "avg_latency_ms": round(total_latency / max(total, 1), 1),
+        },
+        "results": results,
+    }
