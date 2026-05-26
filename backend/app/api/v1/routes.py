@@ -2710,3 +2710,240 @@ async def batch_inference_dataset(
         },
         "results": results,
     }
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# REAL-TIME WEBSOCKET DASHBOARD
+# ═══════════════════════════════════════════════════════════════════════════════
+
+@router.websocket("/ws/factory-monitor")
+async def factory_monitor_ws(websocket: WebSocket):
+    """
+    Real-time factory monitoring via WebSocket.
+    Pushes live updates: part inspected, defect detected, hourly stats.
+    Connect from a factory TV screen or monitoring dashboard.
+    """
+    await websocket.accept()
+    import asyncio
+    import json
+    from datetime import datetime, timedelta
+    from sqlalchemy import text, func as sqlfunc, and_
+
+    try:
+        while True:
+            # Get live stats
+            from app.core.database import engine
+            async with engine.connect() as conn:
+                now = datetime.utcnow()
+                today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+                hour_ago = now - timedelta(hours=1)
+
+                # Today totals
+                today = await conn.execute(text(
+                    "SELECT COUNT(*) as total, COUNT(*) FILTER (WHERE verdict='anomaly') as defects, "
+                    "AVG(latency_ms) as avg_lat FROM inference_logs WHERE created_at >= :ts"
+                ), {"ts": today_start})
+                row = today.mappings().fetchone()
+
+                # Last hour
+                hour = await conn.execute(text(
+                    "SELECT COUNT(*) as total, COUNT(*) FILTER (WHERE verdict='anomaly') as defects "
+                    "FROM inference_logs WHERE created_at >= :ts"
+                ), {"ts": hour_ago})
+                hour_row = hour.mappings().fetchone()
+
+                # Last 5 inferences
+                recent = await conn.execute(text(
+                    "SELECT verdict, latency_ms, created_at FROM inference_logs "
+                    "ORDER BY created_at DESC LIMIT 5"
+                ))
+                recent_list = [
+                    {"verdict": r["verdict"], "latency": round(r["latency_ms"] or 0, 1),
+                     "time": r["created_at"].strftime("%H:%M:%S") if r["created_at"] else ""}
+                    for r in recent.mappings().fetchall()
+                ]
+
+                # Hourly trend (last 12 hours)
+                hourly = []
+                for i in range(12):
+                    h_start = now - timedelta(hours=11-i)
+                    h_end = h_start + timedelta(hours=1)
+                    h_start = h_start.replace(minute=0, second=0, microsecond=0)
+                    h_end = h_end.replace(minute=0, second=0, microsecond=0)
+                    hr = await conn.execute(text(
+                        "SELECT COUNT(*) as total, COUNT(*) FILTER (WHERE verdict='anomaly') as defects "
+                        "FROM inference_logs WHERE created_at >= :s AND created_at < :e"
+                    ), {"s": h_start, "e": h_end})
+                    hr_row = hr.mappings().fetchone()
+                    hourly.append({
+                        "hour": h_start.strftime("%H:00"),
+                        "inspections": hr_row["total"] or 0,
+                        "defects": hr_row["defects"] or 0,
+                    })
+
+            t_total = row["total"] or 0
+            t_defects = row["defects"] or 0
+
+            payload = {
+                "type": "factory_update",
+                "timestamp": now.isoformat(),
+                "today": {
+                    "inspections": t_total,
+                    "defects": t_defects,
+                    "pass_rate": round((1 - t_defects / max(t_total, 1)) * 100, 1),
+                    "avg_latency_ms": round(row["avg_lat"] or 0, 1),
+                },
+                "last_hour": {
+                    "inspections": hour_row["total"] or 0,
+                    "defects": hour_row["defects"] or 0,
+                },
+                "recent": recent_list,
+                "hourly_trend": hourly,
+            }
+
+            await websocket.send_json(payload)
+            await asyncio.sleep(3)
+
+    except Exception:
+        pass
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# IMAGE SEGMENTATION — Pixel-level defect masks
+# ═══════════════════════════════════════════════════════════════════════════════
+
+@router.post("/segment/{image_id}")
+async def segment_defects(
+    image_id: UUID,
+    model_id: Optional[UUID] = None,
+    threshold: float = 0.5,
+    db: AsyncSession = Depends(get_db),
+    user=Depends(get_current_user),
+):
+    """
+    Pixel-level defect segmentation.
+    Uses edge detection + thresholding for anomaly regions,
+    then refines with morphological operations.
+    Returns a binary mask and contour polygons.
+    More precise than bounding boxes for irregular defects.
+    """
+    import numpy as np
+    import cv2
+    import base64
+    from io import BytesIO
+
+    # Get image from MinIO
+    result = await db.execute(select(Image).where(Image.id == image_id))
+    image_obj = result.scalar_one_or_none()
+    if not image_obj:
+        raise HTTPException(404, "Image not found")
+
+    from app.core.storage import get_s3_client
+    s3 = get_s3_client()
+    response = s3.get_object(Bucket=settings.minio_bucket_images, Key=image_obj.storage_path)
+    img_bytes = response["Body"].read()
+
+    img = cv2.imdecode(np.frombuffer(img_bytes, np.uint8), cv2.IMREAD_COLOR)
+    h, w = img.shape[:2]
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+
+    # Multi-scale anomaly detection
+    # 1. Adaptive thresholding for local anomalies
+    adaptive = cv2.adaptiveThreshold(gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY_INV, 21, 10)
+
+    # 2. Edge detection for structural defects
+    edges = cv2.Canny(gray, 50, 150)
+    edges_dilated = cv2.dilate(edges, np.ones((3, 3), np.uint8), iterations=2)
+
+    # 3. Texture analysis — local standard deviation
+    blur = cv2.GaussianBlur(gray.astype(np.float32), (15, 15), 0)
+    blur_sq = cv2.GaussianBlur((gray.astype(np.float32))**2, (15, 15), 0)
+    local_std = np.sqrt(np.maximum(blur_sq - blur**2, 0))
+    std_norm = ((local_std / (local_std.max() + 1e-8)) * 255).astype(np.uint8)
+    _, texture_mask = cv2.threshold(std_norm, int(threshold * 100), 255, cv2.THRESH_BINARY)
+
+    # Combine masks
+    combined = cv2.bitwise_or(adaptive, edges_dilated)
+    combined = cv2.bitwise_or(combined, texture_mask)
+
+    # Morphological cleanup
+    kernel = np.ones((5, 5), np.uint8)
+    combined = cv2.morphologyEx(combined, cv2.MORPH_CLOSE, kernel, iterations=2)
+    combined = cv2.morphologyEx(combined, cv2.MORPH_OPEN, kernel, iterations=1)
+
+    # Find contours (defect regions)
+    contours, _ = cv2.findContours(combined, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
+    # Filter by area
+    min_area = (w * h) * 0.001  # Minimum 0.1% of image
+    defect_regions = []
+    mask_overlay = img.copy()
+
+    for i, contour in enumerate(contours):
+        area = cv2.contourArea(contour)
+        if area < min_area:
+            continue
+
+        # Draw filled contour on overlay
+        color = (0, 0, 255) if area > (w * h * 0.01) else (0, 165, 255)  # Red for large, orange for small
+        cv2.drawContours(mask_overlay, [contour], -1, color, -1)
+
+        # Get contour polygon (simplified)
+        epsilon = 0.02 * cv2.arcLength(contour, True)
+        approx = cv2.approxPolyDP(contour, epsilon, True)
+        polygon = [[int(p[0][0]), int(p[0][1])] for p in approx]
+
+        x, y, cw, ch = cv2.boundingRect(contour)
+        defect_regions.append({
+            "id": len(defect_regions) + 1,
+            "bbox": [int(x), int(y), int(x + cw), int(y + ch)],
+            "polygon": polygon,
+            "area_pixels": int(area),
+            "area_percent": round(area / (w * h) * 100, 2),
+            "perimeter": round(cv2.arcLength(contour, True), 1),
+            "circularity": round(4 * 3.14159 * area / (cv2.arcLength(contour, True)**2 + 1e-8), 3),
+            "severity": "high" if area > (w * h * 0.01) else "medium" if area > (w * h * 0.005) else "low",
+        })
+
+    # Create overlay image (50% transparent)
+    overlay = cv2.addWeighted(img, 0.6, mask_overlay, 0.4, 0)
+
+    # Draw contour outlines
+    for contour in contours:
+        if cv2.contourArea(contour) >= min_area:
+            cv2.drawContours(overlay, [contour], -1, (0, 255, 255), 2)
+
+    # Encode images
+    _, mask_buf = cv2.imencode(".png", combined)
+    mask_b64 = base64.b64encode(mask_buf).decode()
+
+    _, overlay_buf = cv2.imencode(".png", overlay)
+    overlay_b64 = base64.b64encode(overlay_buf).decode()
+
+    # Save overlay to MinIO
+    from datetime import datetime
+    seg_key = f"segmentation/{image_id}/{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}.png"
+    from app.core.storage import generate_presigned_url
+    s3.put_object(Bucket="exports", Key=seg_key, Body=overlay_buf.tobytes(), ContentType="image/png")
+    overlay_url = generate_presigned_url("exports", seg_key)
+
+    total_defect_area = sum(r["area_pixels"] for r in defect_regions)
+    defect_coverage = round(total_defect_area / (w * h) * 100, 2)
+
+    return {
+        "image_id": str(image_id),
+        "image_size": {"width": w, "height": h},
+        "defect_regions": defect_regions,
+        "total_regions": len(defect_regions),
+        "defect_coverage_percent": defect_coverage,
+        "mask_b64": mask_b64,
+        "overlay_b64": overlay_b64,
+        "overlay_url": overlay_url,
+        "threshold": threshold,
+        "verdict": "DEFECTIVE" if defect_regions else "OK",
+        "severity_summary": {
+            "high": len([r for r in defect_regions if r["severity"] == "high"]),
+            "medium": len([r for r in defect_regions if r["severity"] == "medium"]),
+            "low": len([r for r in defect_regions if r["severity"] == "low"]),
+        },
+    }
