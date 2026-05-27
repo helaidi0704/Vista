@@ -85,6 +85,10 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
   zoom = signal(100);
   currentTool = signal<Tool>('rect');
 
+  private getZoomScale(): number {
+    return Math.max(0.1, this.zoom() / 100);
+  }
+
   selectedSeverity = signal<SeverityUi>('Mineur');
   annotationType = signal('Rayure profonde');
   annotationDesc = signal("Rayure profonde orientée à 45° sur la zone d'épaulement droite.");
@@ -129,6 +133,10 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
   private draftRectCurrent: { start: NormPoint; end: NormPoint; dragging: boolean } | null = null;
   private draftPolygonCurrent: { points: NormPoint[]; closed: boolean } = { points: [], closed: false };
   private polygonPreview: NormPoint | null = null;
+  private panOffset = signal({ x: 0, y: 0 });
+  private isPanning = false;
+  private panStart = { x: 0, y: 0 };
+  private panStartOffset = { x: 0, y: 0 };
   private draftFreehandCurrent: { points: NormPoint[]; drawing: boolean } = { points: [], drawing: false };
 
   private loadedImageObj: HTMLImageElement | null = null;
@@ -238,11 +246,17 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
   updateZoom(event: Event): void {
     const input = event.target as HTMLInputElement;
     const value = Number(input.value);
-    this.zoom.set(Number.isFinite(value) ? value : 100);
+    const next = Number.isFinite(value) ? value : 100;
+    this.zoom.set(next);
+    // re-render immediately (image + overlay)
+    this.drawBaseImage();
+    this.drawAnnotationsOnly();
   }
 
   resetZoom(): void {
     this.zoom.set(100);
+    this.drawBaseImage();
+    this.drawAnnotationsOnly();
   }
 
   currentToolLabel(): string {
@@ -275,14 +289,16 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
   }
 
   cursorStyle(): string {
+    if (this.currentTool() === 'pan') return this.isPanning ? 'grabbing' : 'grab';
+
     switch (this.currentTool()) {
-      case 'pan':
-        return 'grab';
       case 'rect':
       case 'polygon':
         return 'crosshair';
       case 'freehand':
         return 'url("data:image/svg+xml;utf8,<svg xmlns=\'http://www.w3.org/2000/svg\' width=\'16\' height=\'16\' fill=\'none\' stroke=\'%23E06C00\' stroke-width=\'2\'><circle cx=\'8\' cy=\'8\' r=\'4\'/></svg>") 8 8, auto';
+      default:
+        return 'crosshair';
     }
   }
 
@@ -377,14 +393,59 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
     if (imgRatio > cvRatio) drawHeight = width / imgRatio;
     else drawWidth = height * imgRatio;
 
+    // Apply zoom around center
+    const scale = this.getZoomScale();
+    drawWidth *= scale;
+    drawHeight *= scale;
+
+    const baseX = (width - drawWidth) / 2;
+    const baseY = (height - drawHeight) / 2;
+    const pan = this.panOffset();
+    let nextPanX = pan.x;
+    let nextPanY = pan.y;
+    let x = baseX + nextPanX;
+    let y = baseY + nextPanY;
+
+    // clamp X
+    if (drawWidth <= width) {
+      x = baseX;
+      nextPanX = 0;
+    } else {
+      const minX = width - drawWidth;
+      const maxX = 0;
+      x = Math.min(maxX, Math.max(minX, x));
+      nextPanX = x - baseX;
+    }
+
+    // clamp Y
+    if (drawHeight <= height) {
+      y = baseY;
+      nextPanY = 0;
+    } else {
+      const minY = height - drawHeight;
+      const maxY = 0;
+      y = Math.min(maxY, Math.max(minY, y));
+      nextPanY = y - baseY;
+    }
+
+    if (nextPanX !== pan.x || nextPanY !== pan.y) {
+      this.panOffset.set({ x: nextPanX, y: nextPanY });
+    }
+
     this.imageRenderRect = {
-      x: (width - drawWidth) / 2,
-      y: (height - drawHeight) / 2,
+      x,
+      y,
       w: drawWidth,
       h: drawHeight,
     };
 
-    ctx.drawImage(this.loadedImageObj, this.imageRenderRect.x, this.imageRenderRect.y, this.imageRenderRect.w, this.imageRenderRect.h);
+    ctx.drawImage(
+      this.loadedImageObj,
+      this.imageRenderRect.x,
+      this.imageRenderRect.y,
+      this.imageRenderRect.w,
+      this.imageRenderRect.h
+    );
   }
 
   private setupDrawingInteraction(): void {
@@ -405,10 +466,25 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
   }
 
   private onPointerDown(e: PointerEvent): void {
-    if (this.imageRenderRect.w === 0) this.drawBaseImage();
-
     const tool = this.currentTool();
-    if (tool === 'pan') return;
+
+    if (tool === 'pan') {
+      // allow panning only if renderRect exists
+      if (this.imageRenderRect.w === 0) this.drawBaseImage();
+
+      const p = this.pointerToCanvasPosition(e);
+      this.isPanning = true;
+      this.panStart = { x: p.x, y: p.y };
+      const off = this.panOffset();
+      this.panStartOffset = { x: off.x, y: off.y };
+      this.drawCanvas.nativeElement.setPointerCapture?.(e.pointerId);
+      // cursor will update via binding, and we redraw to be safe
+      this.drawBaseImage();
+      this.drawAnnotationsOnly();
+      return;
+    }
+
+    if (this.imageRenderRect.w === 0) this.drawBaseImage();
 
     const point = this.pixelToNorm(e);
     if (!point) return;
@@ -456,6 +532,16 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
   private onPointerMove(e: PointerEvent): void {
     if (this.imageRenderRect.w === 0) return;
 
+    if (this.currentTool() === 'pan' && this.isPanning) {
+      const p = this.pointerToCanvasPosition(e);
+      const dx = p.x - this.panStart.x;
+      const dy = p.y - this.panStart.y;
+      this.panOffset.set({ x: this.panStartOffset.x + dx, y: this.panStartOffset.y + dy });
+      this.drawBaseImage();
+      this.drawAnnotationsOnly();
+      return;
+    }
+
     const tool = this.currentTool();
     const point = this.pixelToNorm(e);
 
@@ -480,6 +566,14 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
 
   private onPointerUp(e: PointerEvent): void {
     this.drawCanvas.nativeElement.releasePointerCapture?.(e.pointerId);
+
+    if (this.currentTool() === 'pan' && this.isPanning) {
+      this.isPanning = false;
+      // redraw with clamped offset (drawBaseImage clamps)
+      this.drawBaseImage();
+      this.drawAnnotationsOnly();
+      return;
+    }
 
     const tool = this.currentTool();
 
