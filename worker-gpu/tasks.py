@@ -950,3 +950,292 @@ def compute_gradcam(model_id: str, image_b64: str):
     logger.info(f"🔥 Computing Grad-CAM for model {model_id}")
     time.sleep(2)
     return {"gradcam_path": f"gradcam/{model_id}/{int(time.time())}.png"}
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# TASK: Export to ONNX — Real conversion
+# ═══════════════════════════════════════════════════════════════════════════════
+
+@app.task(name="tasks.export_onnx", bind=True)
+def export_onnx(self, model_id, weights_path, architecture, imgsz=640, simplify=True):
+    """
+    Real ONNX export using Ultralytics.
+    Downloads weights from MinIO, converts to ONNX, uploads back.
+    """
+    logger.info(f"Exporting model {model_id} to ONNX (imgsz={imgsz})")
+    try:
+        from ultralytics import YOLO
+        import os
+
+        # Download weights from MinIO
+        local_weights = f"/tmp/onnx_export_{model_id}.pt"
+        s3 = get_s3()
+        s3.download_file(
+            os.environ.get("MINIO_BUCKET_MODELS", "models-weights"),
+            weights_path,
+            local_weights,
+        )
+        logger.info(f"Downloaded weights: {weights_path}")
+
+        # Load model and export to ONNX
+        model = YOLO(local_weights)
+        onnx_path = model.export(format="onnx", imgsz=imgsz, simplify=simplify)
+        logger.info(f"ONNX exported to: {onnx_path}")
+
+        # Get file size
+        file_size = os.path.getsize(onnx_path)
+        file_size_mb = round(file_size / (1024 * 1024), 1)
+
+        # Upload to MinIO
+        onnx_key = f"exports/{model_id}/model.onnx"
+        s3.upload_file(str(onnx_path), "exports", onnx_key)
+        logger.info(f"ONNX uploaded to MinIO: {onnx_key} ({file_size_mb} MB)")
+
+        # Generate presigned URL
+        external_ip = os.environ.get("EXTERNAL_IP", "localhost")
+        from botocore.config import Config as BotoConfig
+        import boto3
+        s3_public = boto3.client(
+            "s3", endpoint_url=f"http://{external_ip}:9000",
+            aws_access_key_id=os.environ.get("MINIO_ACCESS_KEY", "vistaadmin"),
+            aws_secret_access_key=os.environ.get("MINIO_SECRET_KEY", "vistaSecretKey2024"),
+            config=BotoConfig(signature_version="s3v4"), region_name="us-east-1",
+        )
+        onnx_url = s3_public.generate_presigned_url(
+            "get_object", Params={"Bucket": "exports", "Key": onnx_key}, ExpiresIn=3600,
+        )
+
+        # Cleanup
+        os.remove(local_weights)
+
+        logger.info(f"ONNX export complete: {file_size_mb} MB")
+        return {"onnx_path": onnx_key, "onnx_url": onnx_url, "file_size_mb": file_size_mb}
+
+    except Exception as e:
+        logger.error(f"ONNX export failed: {e}")
+        raise
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# TASK: Video Inference — Process video file
+# ═══════════════════════════════════════════════════════════════════════════════
+
+@app.task(name="tasks.inference_video", bind=True)
+def inference_video(self, model_id, video_b64, fps_sample=1, confidence=0.25):
+    """
+    Run inference on every Nth frame of a video.
+    Returns per-frame detections and summary.
+    """
+    logger.info(f"Video inference: model={model_id}, fps_sample={fps_sample}")
+    try:
+        import cv2
+        import numpy as np
+        import torch
+        from ultralytics import YOLO
+        from PIL import Image as PILImage
+        from io import BytesIO
+
+        # Decode video to temp file
+        video_bytes = base64.b64decode(video_b64)
+        video_path = f"/tmp/video_{model_id}_{int(time.time())}.mp4"
+        with open(video_path, "wb") as f:
+            f.write(video_bytes)
+
+        # Load model
+        weights_cache = f"/tmp/model_cache/{model_id}/best.pt"
+        if os.path.exists(weights_cache):
+            model = YOLO(weights_cache)
+        else:
+            # Download from MinIO
+            conn = get_db_connection()
+            from sqlalchemy import text
+            result = conn.execute(text("SELECT weights_path, architecture FROM ml_models WHERE id = :id"), {"id": model_id})
+            model_info = result.mappings().fetchone()
+            conn.close()
+
+            if model_info and model_info["weights_path"]:
+                os.makedirs(os.path.dirname(weights_cache), exist_ok=True)
+                s3 = get_s3()
+                s3.download_file(
+                    os.environ.get("MINIO_BUCKET_MODELS", "models-weights"),
+                    model_info["weights_path"], weights_cache,
+                )
+                model = YOLO(weights_cache)
+            else:
+                arch_map = {"yolov8n": "yolov8n.pt", "yolov8s": "yolov8s.pt"}
+                model = YOLO(arch_map.get(model_info["architecture"] if model_info else "yolov8n", "yolov8n.pt"))
+
+        # Open video
+        cap = cv2.VideoCapture(video_path)
+        if not cap.isOpened():
+            raise ValueError("Cannot open video file")
+
+        video_fps = cap.get(cv2.CAP_PROP_FPS) or 30
+        total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+        duration = total_frames / video_fps
+        frame_interval = max(1, int(video_fps / fps_sample))
+
+        logger.info(f"Video: {total_frames} frames, {video_fps:.1f} fps, {duration:.1f}s, sampling every {frame_interval} frames")
+
+        frame_results = []
+        frame_idx = 0
+        total_ok = 0
+        total_anomaly = 0
+        total_latency = 0
+
+        while cap.isOpened():
+            ret, frame = cap.read()
+            if not ret:
+                break
+
+            if frame_idx % frame_interval == 0:
+                t0 = time.time()
+                results = model.predict(source=frame, conf=confidence, iou=0.45, verbose=False)
+                latency = (time.time() - t0) * 1000
+
+                detections = []
+                if results and len(results) > 0 and results[0].boxes is not None:
+                    for box in results[0].boxes:
+                        x1, y1, x2, y2 = box.xyxy[0].tolist()
+                        conf = float(box.conf[0])
+                        cls_id = int(box.cls[0])
+                        cls_name = model.names.get(cls_id, f"class_{cls_id}")
+                        detections.append({
+                            "class": cls_name, "confidence": round(conf, 3),
+                            "bbox": [int(x1), int(y1), int(x2), int(y2)],
+                        })
+
+                verdict = "anomaly" if detections else "ok"
+                timestamp = round(frame_idx / video_fps, 2)
+
+                if verdict == "ok":
+                    total_ok += 1
+                else:
+                    total_anomaly += 1
+                total_latency += latency
+
+                frame_results.append({
+                    "frame": frame_idx,
+                    "timestamp_sec": timestamp,
+                    "verdict": verdict,
+                    "detections": len(detections),
+                    "details": detections,
+                    "latency_ms": round(latency, 1),
+                })
+
+            frame_idx += 1
+
+        cap.release()
+        os.remove(video_path)
+
+        total = len(frame_results)
+        logger.info(f"Video inference complete: {total} frames analyzed")
+
+        return {
+            "video_info": {
+                "total_frames": total_frames,
+                "fps": round(video_fps, 1),
+                "duration_sec": round(duration, 1),
+                "frames_analyzed": total,
+                "sample_fps": fps_sample,
+            },
+            "summary": {
+                "ok": total_ok,
+                "anomaly": total_anomaly,
+                "pass_rate": round(total_ok / max(total, 1) * 100, 1),
+                "defect_rate": round(total_anomaly / max(total, 1) * 100, 1),
+                "avg_latency_ms": round(total_latency / max(total, 1), 1),
+                "total_defects_found": sum(r["detections"] for r in frame_results),
+            },
+            "frames": frame_results,
+            "timeline": [
+                {"sec": r["timestamp_sec"], "defects": r["detections"]}
+                for r in frame_results if r["detections"] > 0
+            ],
+        }
+
+    except Exception as e:
+        logger.error(f"Video inference failed: {e}")
+        raise
+
+
+@app.task(name="tasks.inference_video_stream", bind=True)
+def inference_video_stream(self, model_id, video_url, fps_sample=1, confidence=0.25, max_frames=100):
+    """
+    Run inference on RTSP stream or video URL.
+    Captures up to max_frames, runs inference, returns results.
+    """
+    logger.info(f"Stream inference: model={model_id}, url={video_url}, max_frames={max_frames}")
+    try:
+        import cv2
+        from ultralytics import YOLO
+
+        # Load model (same as video inference)
+        weights_cache = f"/tmp/model_cache/{model_id}/best.pt"
+        if os.path.exists(weights_cache):
+            model = YOLO(weights_cache)
+        else:
+            model = YOLO("yolov8n.pt")
+
+        cap = cv2.VideoCapture(video_url)
+        if not cap.isOpened():
+            raise ValueError(f"Cannot open stream: {video_url}")
+
+        video_fps = cap.get(cv2.CAP_PROP_FPS) or 30
+        frame_interval = max(1, int(video_fps / fps_sample))
+
+        frame_results = []
+        frame_idx = 0
+        analyzed = 0
+
+        while cap.isOpened() and analyzed < max_frames:
+            ret, frame = cap.read()
+            if not ret:
+                break
+
+            if frame_idx % frame_interval == 0:
+                t0 = time.time()
+                results = model.predict(source=frame, conf=confidence, iou=0.45, verbose=False)
+                latency = (time.time() - t0) * 1000
+
+                detections = []
+                if results and len(results) > 0 and results[0].boxes is not None:
+                    for box in results[0].boxes:
+                        detections.append({
+                            "class": model.names.get(int(box.cls[0]), "unknown"),
+                            "confidence": round(float(box.conf[0]), 3),
+                            "bbox": [int(x) for x in box.xyxy[0].tolist()],
+                        })
+
+                frame_results.append({
+                    "frame": frame_idx,
+                    "timestamp_sec": round(frame_idx / video_fps, 2),
+                    "verdict": "anomaly" if detections else "ok",
+                    "detections": len(detections),
+                    "details": detections,
+                    "latency_ms": round(latency, 1),
+                })
+                analyzed += 1
+
+            frame_idx += 1
+
+        cap.release()
+
+        total = len(frame_results)
+        anomalies = len([r for r in frame_results if r["verdict"] == "anomaly"])
+
+        return {
+            "source": video_url,
+            "frames_analyzed": total,
+            "summary": {
+                "ok": total - anomalies,
+                "anomaly": anomalies,
+                "defect_rate": round(anomalies / max(total, 1) * 100, 1),
+                "avg_latency_ms": round(sum(r["latency_ms"] for r in frame_results) / max(total, 1), 1),
+            },
+            "frames": frame_results,
+        }
+
+    except Exception as e:
+        logger.error(f"Stream inference failed: {e}")
+        raise

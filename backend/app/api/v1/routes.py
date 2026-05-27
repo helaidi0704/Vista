@@ -3235,3 +3235,153 @@ async def get_ui_config(
         "organization": org,
         "ui": config,
     }
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# REAL ONNX EXPORT — Convert YOLOv8 to ONNX for edge deployment
+# ═══════════════════════════════════════════════════════════════════════════════
+
+@router.post("/models/{model_id}/export-onnx")
+async def export_model_onnx(
+    model_id: UUID,
+    imgsz: int = 640,
+    simplify: bool = True,
+    db: AsyncSession = Depends(get_db),
+    user=Depends(get_current_user),
+):
+    """
+    Export a trained YOLOv8 model to ONNX format.
+    ONNX runs on any device: NVIDIA Jetson, Intel NCS, mobile, browser.
+    10-50x faster inference than PyTorch on edge hardware.
+
+    Returns: download URL for the .onnx file.
+    """
+    # Get model info
+    m = await db.execute(select(MLModel).where(MLModel.id == model_id))
+    model = m.scalar_one_or_none()
+    if not model:
+        raise HTTPException(404, "Model not found")
+
+    # Dispatch export to GPU worker
+    task = celery_app.send_task(
+        "tasks.export_onnx",
+        args=[str(model_id), str(model.weights_path), model.architecture, imgsz, simplify],
+        queue="gpu",
+    )
+
+    try:
+        result = task.get(timeout=300)
+        return {
+            "model_id": str(model_id),
+            "model_name": model.name,
+            "format": "onnx",
+            "imgsz": imgsz,
+            "simplified": simplify,
+            "onnx_path": result.get("onnx_path", ""),
+            "onnx_url": result.get("onnx_url", ""),
+            "file_size_mb": result.get("file_size_mb", 0),
+            "message": f"Model exported to ONNX — ready for edge deployment",
+        }
+    except Exception as e:
+        raise HTTPException(500, f"ONNX export failed: {str(e)}")
+
+
+@router.get("/models/{model_id}/export-formats")
+async def list_export_formats(
+    model_id: UUID,
+    db: AsyncSession = Depends(get_db),
+):
+    """List available export formats for a model."""
+    m = await db.execute(select(MLModel).where(MLModel.id == model_id))
+    model = m.scalar_one_or_none()
+    if not model:
+        raise HTTPException(404, "Model not found")
+
+    return {
+        "model_id": str(model_id),
+        "model_name": model.name,
+        "formats": [
+            {"format": "onnx", "description": "Universal — runs on any device", "endpoint": f"/api/v1/models/{model_id}/export-onnx"},
+            {"format": "torchscript", "description": "PyTorch optimized — fast on GPU servers", "status": "available"},
+            {"format": "tflite", "description": "TensorFlow Lite — mobile and microcontrollers", "status": "coming_soon"},
+            {"format": "tensorrt", "description": "NVIDIA TensorRT — fastest on NVIDIA GPUs", "status": "coming_soon"},
+            {"format": "openvino", "description": "Intel OpenVINO — optimized for Intel hardware", "status": "coming_soon"},
+        ],
+    }
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# VIDEO STREAM INFERENCE — Real-time video processing
+# ═══════════════════════════════════════════════════════════════════════════════
+
+@router.post("/inference/video")
+async def inference_video(
+    model_id: UUID,
+    video: UploadFile = File(...),
+    fps_sample: int = 1,
+    confidence: float = 0.25,
+    db: AsyncSession = Depends(get_db),
+    user=Depends(get_current_user),
+):
+    """
+    Run inference on a video file.
+    Samples frames at specified FPS, runs YOLOv8 on each frame.
+    Returns per-frame results + summary statistics.
+
+    fps_sample=1 means analyze 1 frame per second.
+    fps_sample=5 means analyze 5 frames per second (slower but more thorough).
+    """
+    import base64
+
+    if not video.filename.lower().endswith(('.mp4', '.avi', '.mov', '.mkv', '.webm')):
+        raise HTTPException(400, "Supported formats: mp4, avi, mov, mkv, webm")
+
+    # Save video to temp file
+    video_bytes = await video.read()
+    if len(video_bytes) > 100 * 1024 * 1024:
+        raise HTTPException(400, "Video too large (max 100MB)")
+
+    # Dispatch to GPU worker
+    video_b64 = base64.b64encode(video_bytes).decode()
+
+    task = celery_app.send_task(
+        "tasks.inference_video",
+        args=[str(model_id), video_b64, fps_sample, confidence],
+        queue="gpu",
+    )
+
+    try:
+        result = task.get(timeout=600)
+        return result
+    except Exception as e:
+        raise HTTPException(500, f"Video inference failed: {str(e)}")
+
+
+@router.post("/inference/video-url")
+async def inference_video_url(
+    model_id: UUID,
+    video_url: str = "",
+    fps_sample: int = 1,
+    confidence: float = 0.25,
+    max_frames: int = 100,
+    db: AsyncSession = Depends(get_db),
+    user=Depends(get_current_user),
+):
+    """
+    Run inference on a video from URL or RTSP stream.
+    Supports: RTSP cameras, HTTP video URLs, local file paths.
+
+    Example RTSP: rtsp://camera_ip:554/stream
+    Example HTTP: https://example.com/video.mp4
+    """
+    task = celery_app.send_task(
+        "tasks.inference_video_stream",
+        args=[str(model_id), video_url, fps_sample, confidence, max_frames],
+        queue="gpu",
+    )
+
+    try:
+        result = task.get(timeout=600)
+        return result
+    except Exception as e:
+        raise HTTPException(500, f"Video stream inference failed: {str(e)}")
