@@ -1,0 +1,92 @@
+{
+  "dashboard": {
+    "id": null,
+    "uid": "vista-main",
+    "title": "VISTA — Industrial Inspection Platform",
+    "tags": ["vista", "mlops", "inspection"],
+    "timezone": "browser",
+    "refresh": "15s",
+    "panels": [
+      {
+        "id": 1,
+        "title": "Inspections Today",
+        "type": "stat",
+        "gridPos": {"h": 4, "w": 4, "x": 0, "y": 0},
+        "targets": [{"expr": "vista_inferences_today_total", "legendFormat": "Total"}],
+        "fieldConfig": {"defaults": {"color": {"mode": "thresholds"}, "thresholds": {"steps": [{"color": "green", "value": null}]}}}
+      },
+      {
+        "id": 2,
+        "title": "Defects Today",
+        "type": "stat",
+        "gridPos": {"h": 4, "w": 4, "x": 4, "y": 0},
+        "targets": [{"expr": "vista_defects_today_total", "legendFormat": "Defects"}],
+        "fieldConfig": {"defaults": {"color": {"mode": "thresholds"}, "thresholds": {"steps": [{"color": "green", "value": null}, {"color": "red", "value": 5}]}}}
+      },
+      {
+        "id": 3,
+        "title": "Defect Rate %",
+        "type": "gauge",
+        "gridPos": {"h": 4, "w": 4, "x": 8, "y": 0},
+        "targets": [{"expr": "vista_defect_rate_percent", "legendFormat": "Rate"}],
+        "fieldConfig": {"defaults": {"min": 0, "max": 100, "thresholds": {"steps": [{"color": "green", "value": null}, {"color": "yellow", "value": 5}, {"color": "red", "value": 15}]}}}
+      },
+      {
+        "id": 4,
+        "title": "Avg Latency (ms)",
+        "type": "stat",
+        "gridPos": {"h": 4, "w": 4, "x": 12, "y": 0},
+        "targets": [{"expr": "vista_inference_latency_avg_ms", "legendFormat": "Latency"}],
+        "fieldConfig": {"defaults": {"unit": "ms", "thresholds": {"steps": [{"color": "green", "value": null}, {"color": "yellow", "value": 500}, {"color": "red", "value": 2000}]}}}
+      },
+      {
+        "id": 5,
+        "title": "Models",
+        "type": "stat",
+        "gridPos": {"h": 4, "w": 3, "x": 16, "y": 0},
+        "targets": [{"expr": "vista_models_total"}]
+      },
+      {
+        "id": 6,
+        "title": "Images",
+        "type": "stat",
+        "gridPos": {"h": 4, "w": 3, "x": 19, "y": 0},
+        "targets": [{"expr": "vista_images_total"}]
+      },
+      {
+        "id": 7,
+        "title": "Inspections (Last Hour)",
+        "type": "timeseries",
+        "gridPos": {"h": 8, "w": 12, "x": 0, "y": 4},
+        "targets": [
+          {"expr": "vista_inferences_last_hour", "legendFormat": "Inspections/hour"},
+          {"expr": "vista_defects_today_total", "legendFormat": "Defects"}
+        ]
+      },
+      {
+        "id": 8,
+        "title": "Training Jobs",
+        "type": "bargauge",
+        "gridPos": {"h": 8, "w": 6, "x": 12, "y": 4},
+        "targets": [
+          {"expr": "vista_training_jobs{status=\"completed\"}", "legendFormat": "Completed"},
+          {"expr": "vista_training_jobs{status=\"running\"}", "legendFormat": "Running"},
+          {"expr": "vista_training_jobs{status=\"queued\"}", "legendFormat": "Queued"},
+          {"expr": "vista_training_jobs{status=\"failed\"}", "legendFormat": "Failed"}
+        ]
+      },
+      {
+        "id": 9,
+        "title": "Platform Overview",
+        "type": "stat",
+        "gridPos": {"h": 4, "w": 6, "x": 18, "y": 4},
+        "targets": [
+          {"expr": "vista_users_total", "legendFormat": "Users"},
+          {"expr": "vista_organizations_total", "legendFormat": "Orgs"},
+          {"expr": "vista_datasets_total", "legendFormat": "Datasets"},
+          {"expr": "vista_annotations_total", "legendFormat": "Annotations"}
+        ]
+      }
+    ]
+  }
+}

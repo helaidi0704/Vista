@@ -229,14 +229,14 @@ services:
       context: ./mlflow
       dockerfile: Dockerfile
     container_name: vista-mlflow
+    environment:
+      MLFLOW_BACKEND_STORE_URI: "postgresql://vista:${POSTGRES_PASSWORD:-vista_dev_2024}@db:5432/vista"
+      MLFLOW_DEFAULT_ARTIFACT_ROOT: "s3://mlflow-artifacts"
+      AWS_ACCESS_KEY_ID: "${MINIO_ACCESS_KEY:-vistaadmin}"
+      AWS_SECRET_ACCESS_KEY: "${MINIO_SECRET_KEY:-vistaSecretKey2024}"
+      MLFLOW_S3_ENDPOINT_URL: "http://minio:9000"
     ports:
       - "5000:5000"
-    environment:
-      MLFLOW_BACKEND_STORE_URI: postgresql://vista:${POSTGRES_PASSWORD:-vista_dev_2024}@db:5432/vista
-      MLFLOW_DEFAULT_ARTIFACT_ROOT: s3://mlflow-artifacts
-      AWS_ACCESS_KEY_ID: ${MINIO_ACCESS_KEY:-vistaadmin}
-      AWS_SECRET_ACCESS_KEY: ${MINIO_SECRET_KEY:-vistaSecretKey2024}
-      MLFLOW_S3_ENDPOINT_URL: http://minio:9000
     depends_on:
       db:
         condition: service_healthy
@@ -246,11 +246,44 @@ services:
     mem_limit: 1g
     cpus: 0.5
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:5000/health')"]
+      test: ["CMD", "curl", "-f", "http://localhost:5000/health"]
       interval: 15s
       timeout: 5s
       retries: 5
       start_period: 15s
+
+
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: vista-prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml
+      - prometheusdata:/prometheus
+    restart: unless-stopped
+    mem_limit: 1g
+    cpus: 0.5
+
+  grafana:
+    image: grafana/grafana:latest
+    container_name: vista-grafana
+    ports:
+      - "3001:3000"
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: vista2024
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    volumes:
+      - grafanadata:/var/lib/grafana
+      - ./monitoring/grafana-datasource.yml:/etc/grafana/provisioning/datasources/prometheus.yml
+      - ./monitoring/grafana-dashboard.json:/var/lib/grafana/dashboards/vista.json
+      - ./monitoring/grafana-dashboard-provider.yml:/etc/grafana/provisioning/dashboards/provider.yml
+    depends_on:
+      - prometheus
+    restart: unless-stopped
+    mem_limit: 1g
+    cpus: 0.5
 
 volumes:
   pgdata:
@@ -260,4 +293,8 @@ volumes:
   miniodata:
     driver: local
   model-cache:
+    driver: local
+  prometheusdata:
+    driver: local
+  grafanadata:
     driver: local

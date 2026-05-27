@@ -3385,3 +3385,271 @@ async def inference_video_url(
         return result
     except Exception as e:
         raise HTTPException(500, f"Video stream inference failed: {str(e)}")
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# EMAIL NOTIFICATIONS
+# ═══════════════════════════════════════════════════════════════════════════════
+
+@router.post("/notifications/email/config")
+async def configure_email(
+    smtp_host: str = "smtp.gmail.com",
+    smtp_port: int = 587,
+    smtp_user: str = "",
+    smtp_password: str = "",
+    from_email: str = "",
+    db: AsyncSession = Depends(get_db),
+    user=Depends(get_current_user),
+):
+    """
+    Configure SMTP settings for email notifications.
+    Supports Gmail, Outlook, SendGrid, or any SMTP server.
+    """
+    from sqlalchemy import text
+    org_id = user.get("organization_id") if user else None
+
+    await db.execute(text("""
+        CREATE TABLE IF NOT EXISTS email_config (
+            id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+            organization_id UUID,
+            smtp_host VARCHAR(255) NOT NULL,
+            smtp_port INTEGER DEFAULT 587,
+            smtp_user VARCHAR(255),
+            smtp_password VARCHAR(255),
+            from_email VARCHAR(255),
+            is_active BOOLEAN DEFAULT true,
+            created_at TIMESTAMPTZ DEFAULT NOW()
+        )
+    """))
+
+    # Upsert config
+    await db.execute(text("DELETE FROM email_config WHERE organization_id = :org"), {"org": org_id})
+    await db.execute(text("""
+        INSERT INTO email_config (organization_id, smtp_host, smtp_port, smtp_user, smtp_password, from_email)
+        VALUES (:org, :host, :port, :user, :pwd, :from_email)
+    """), {"org": org_id, "host": smtp_host, "port": smtp_port, "user": smtp_user, "pwd": smtp_password, "from_email": from_email})
+
+    return {"message": "Email configuration saved", "smtp_host": smtp_host, "from_email": from_email}
+
+
+@router.post("/notifications/email/send")
+async def send_email_notification(
+    to: str,
+    subject: str = "VISTA — Inspection Report",
+    body: str = "",
+    include_daily_report: bool = False,
+    db: AsyncSession = Depends(get_db),
+    user=Depends(get_current_user),
+):
+    """
+    Send an email notification.
+    Can include the daily inspection report automatically.
+    """
+    import smtplib
+    from email.mime.text import MIMEText
+    from email.mime.multipart import MIMEMultipart
+    from sqlalchemy import text
+    from datetime import datetime, timedelta
+
+    org_id = user.get("organization_id") if user else None
+
+    # Get SMTP config
+    try:
+        config_result = await db.execute(text(
+            "SELECT * FROM email_config WHERE organization_id = :org AND is_active = true LIMIT 1"
+        ), {"org": org_id})
+        config = config_result.mappings().fetchone()
+    except Exception:
+        config = None
+
+    # Build email body
+    if include_daily_report:
+        from sqlalchemy import func as sqlfunc, and_
+        now = datetime.utcnow()
+        today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+
+        total_r = await db.execute(text(
+            "SELECT COUNT(*) FROM inference_logs WHERE created_at >= :ts"
+        ), {"ts": today_start})
+        total = total_r.scalar() or 0
+
+        defects_r = await db.execute(text(
+            "SELECT COUNT(*) FROM inference_logs WHERE created_at >= :ts AND verdict = 'anomaly'"
+        ), {"ts": today_start})
+        defects = defects_r.scalar() or 0
+
+        lat_r = await db.execute(text(
+            "SELECT AVG(latency_ms) FROM inference_logs WHERE created_at >= :ts"
+        ), {"ts": today_start})
+        avg_lat = round(lat_r.scalar() or 0, 1)
+
+        body = f"""
+VISTA — Daily Inspection Report
+================================
+Date: {now.strftime('%Y-%m-%d %H:%M UTC')}
+Organization: {user.get('full_name', 'N/A')}
+
+Today's Summary:
+  Parts inspected: {total}
+  Defects detected: {defects}
+  Pass rate: {round((1 - defects / max(total, 1)) * 100, 1)}%
+  Defect rate: {round(defects / max(total, 1) * 100, 1)}%
+  Average latency: {avg_lat} ms
+
+{'⚠️ ALERT: Defect rate exceeds 10%!' if defects / max(total, 1) > 0.1 else '✅ All metrics within normal range.'}
+
+---
+This report was generated automatically by VISTA.
+"""
+
+    # Try to send email
+    if config:
+        try:
+            msg = MIMEMultipart()
+            msg["From"] = config["from_email"] or config["smtp_user"]
+            msg["To"] = to
+            msg["Subject"] = subject
+            msg.attach(MIMEText(body, "plain"))
+
+            with smtplib.SMTP(config["smtp_host"], config["smtp_port"]) as server:
+                server.starttls()
+                server.login(config["smtp_user"], config["smtp_password"])
+                server.send_message(msg)
+
+            return {
+                "status": "sent",
+                "to": to,
+                "subject": subject,
+                "message": "Email sent successfully",
+            }
+        except Exception as e:
+            return {
+                "status": "failed",
+                "to": to,
+                "subject": subject,
+                "error": str(e),
+                "body_preview": body[:200],
+                "message": "Email sending failed — check SMTP configuration",
+            }
+    else:
+        return {
+            "status": "no_config",
+            "to": to,
+            "subject": subject,
+            "body_preview": body[:500] if body else "No body",
+            "message": "No SMTP configured — email content generated but not sent. Configure SMTP at /notifications/email/config",
+        }
+
+
+@router.post("/notifications/email/test")
+async def test_email(
+    to: str,
+    db: AsyncSession = Depends(get_db),
+    user=Depends(get_current_user),
+):
+    """Send a test email to verify SMTP configuration."""
+    return await send_email_notification(
+        to=to,
+        subject="VISTA — Test Email",
+        body=f"This is a test email from VISTA.\n\nIf you received this, email notifications are working correctly.\n\nSent by: {user.get('full_name', 'System')}",
+        db=db,
+        user=user,
+    )
+
+
+@router.get("/notifications/email/preview-daily")
+async def preview_daily_report(
+    db: AsyncSession = Depends(get_db),
+    user=Depends(get_current_user),
+):
+    """Preview the daily report email without sending."""
+    return await send_email_notification(
+        to="preview@example.com",
+        subject="VISTA — Daily Report Preview",
+        include_daily_report=True,
+        db=db,
+        user=user,
+    )
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# PROMETHEUS METRICS
+# ═══════════════════════════════════════════════════════════════════════════════
+
+@router.get("/metrics")
+async def prometheus_metrics(
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Prometheus-compatible metrics endpoint.
+    Scraped by Prometheus every 15 seconds.
+    Visualized in Grafana dashboards.
+    """
+    from fastapi.responses import PlainTextResponse
+    from sqlalchemy import text, func as sqlfunc
+    from datetime import datetime, timedelta
+
+    now = datetime.utcnow()
+    today = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    hour_ago = now - timedelta(hours=1)
+
+    # Collect metrics
+    metrics = []
+
+    # Total inferences today
+    total_r = await db.execute(text("SELECT COUNT(*) FROM inference_logs WHERE created_at >= :ts"), {"ts": today})
+    total = total_r.scalar() or 0
+    metrics.append(f'vista_inferences_today_total {total}')
+
+    # Defects today
+    def_r = await db.execute(text("SELECT COUNT(*) FROM inference_logs WHERE created_at >= :ts AND verdict = 'anomaly'"), {"ts": today})
+    defects = def_r.scalar() or 0
+    metrics.append(f'vista_defects_today_total {defects}')
+
+    # Defect rate
+    defect_rate = round(defects / max(total, 1) * 100, 2)
+    metrics.append(f'vista_defect_rate_percent {defect_rate}')
+
+    # Average latency
+    lat_r = await db.execute(text("SELECT AVG(latency_ms) FROM inference_logs WHERE created_at >= :ts"), {"ts": hour_ago})
+    avg_lat = round(lat_r.scalar() or 0, 2)
+    metrics.append(f'vista_inference_latency_avg_ms {avg_lat}')
+
+    # Total models
+    model_r = await db.execute(text("SELECT COUNT(*) FROM ml_models"))
+    metrics.append(f'vista_models_total {model_r.scalar() or 0}')
+
+    # Total datasets
+    ds_r = await db.execute(text("SELECT COUNT(*) FROM datasets"))
+    metrics.append(f'vista_datasets_total {ds_r.scalar() or 0}')
+
+    # Total images
+    img_r = await db.execute(text("SELECT COUNT(*) FROM images"))
+    metrics.append(f'vista_images_total {img_r.scalar() or 0}')
+
+    # Total annotations
+    ann_r = await db.execute(text("SELECT COUNT(*) FROM annotations"))
+    metrics.append(f'vista_annotations_total {ann_r.scalar() or 0}')
+
+    # Total users
+    usr_r = await db.execute(text("SELECT COUNT(*) FROM users"))
+    metrics.append(f'vista_users_total {usr_r.scalar() or 0}')
+
+    # Total organizations
+    org_r = await db.execute(text("SELECT COUNT(*) FROM organizations"))
+    metrics.append(f'vista_organizations_total {org_r.scalar() or 0}')
+
+    # Training jobs by status
+    for status in ["queued", "running", "completed", "failed"]:
+        job_r = await db.execute(text("SELECT COUNT(*) FROM training_jobs WHERE status = :s"), {"s": status})
+        metrics.append(f'vista_training_jobs{{status="{status}"}} {job_r.scalar() or 0}')
+
+    # Last hour inferences
+    hour_r = await db.execute(text("SELECT COUNT(*) FROM inference_logs WHERE created_at >= :ts"), {"ts": hour_ago})
+    metrics.append(f'vista_inferences_last_hour {hour_r.scalar() or 0}')
+
+    # System info
+    metrics.append(f'vista_info{{version="12.0"}} 1')
+
+    output = "# VISTA Prometheus Metrics\n" + "\n".join(metrics) + "\n"
+    return PlainTextResponse(output, media_type="text/plain")
