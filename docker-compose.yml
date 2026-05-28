@@ -285,6 +285,22 @@ services:
     mem_limit: 1g
     cpus: 0.5
 
+  nginx:
+    image: nginx:alpine
+    container_name: vista-nginx
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/conf.d/default.conf
+      - ./nginx/ssl:/etc/nginx/ssl
+    depends_on:
+      - api
+      - ui
+    restart: unless-stopped
+    mem_limit: 256m
+    cpus: 0.25
+
 volumes:
   pgdata:
     driver: local
@@ -298,3 +314,5 @@ volumes:
     driver: local
   grafanadata:
     driver: local
+
+
