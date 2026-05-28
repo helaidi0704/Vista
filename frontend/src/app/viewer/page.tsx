@@ -26,6 +26,8 @@ export default function ViewerPage() {
   const drawingRef = useRef(false);
   const startRef = useRef({ x: 0, y: 0 });
   const curRectRef = useRef<{ x: number; y: number; w: number; h: number } | null>(null);
+  const freehandRef = useRef<{x: number; y: number}[]>([]);
+  const panOffsetRef = useRef<{x: number; y: number}>({ x: 0, y: 0 });
 
   useEffect(() => {
     api.get("/api/v1/datasets").then(({ data }) => {
@@ -74,7 +76,7 @@ export default function ViewerPage() {
     if (img) {
       const s = (zoom / 100) * Math.min(W / img.width, H / img.height);
       const dw = img.width * s, dh = img.height * s;
-      const ir = { x: (W - dw) / 2, y: (H - dh) / 2, w: dw, h: dh };
+      const ir = { x: (W - dw) / 2 + panOffsetRef.current.x, y: (H - dh) / 2 + panOffsetRef.current.y, w: dw, h: dh };
       irRef.current = ir;
       x.drawImage(img, ir.x, ir.y, ir.w, ir.h);
     } else {
@@ -84,21 +86,39 @@ export default function ViewerPage() {
     }
     const ir = irRef.current;
     annotations.forEach(a => {
-      if (a.shape !== "bbox") return;
-      const co = a.coordinates as BBoxCoords;
-      const rx = ir.x + co.nx * ir.w, ry = ir.y + co.ny * ir.h;
-      const rw = co.nw * ir.w, rh = co.nh * ir.h;
-      const hov = (a.id || a._fabricId) === hoveredAnnot;
+      const co = a.coordinates as any;
       let col = "#00C7BE";
       if (a.severity === "critical" || a.severity === "high") col = "#FF453A";
       else if (a.severity === "medium") col = "#FFD60A";
+      const hov = (a.id || a._fabricId) === hoveredAnnot;
       if (hov) { x.shadowColor = col; x.shadowBlur = 12; }
       x.strokeStyle = col; x.lineWidth = hov ? 3 : 2;
       x.setLineDash(a._saved === false ? [6, 3] : []);
-      x.strokeRect(rx, ry, rw, rh);
-      x.fillStyle = col + (hov ? "30" : "15");
-      x.fillRect(rx, ry, rw, rh);
+
+      if (a.shape === "polygon" && co.polygon && co.polygon.length > 2) {
+        // Draw polygon
+        x.beginPath();
+        const p0 = co.polygon[0];
+        x.moveTo(ir.x + p0.x * ir.w, ir.y + p0.y * ir.h);
+        for (let i = 1; i < co.polygon.length; i++) {
+          x.lineTo(ir.x + co.polygon[i].x * ir.w, ir.y + co.polygon[i].y * ir.h);
+        }
+        x.closePath();
+        x.stroke();
+        x.fillStyle = col + (hov ? "30" : "15");
+        x.fill();
+      } else {
+        // Draw bbox
+        const rx = ir.x + co.nx * ir.w, ry = ir.y + co.ny * ir.h;
+        const rw = co.nw * ir.w, rh = co.nh * ir.h;
+        x.strokeRect(rx, ry, rw, rh);
+        x.fillStyle = col + (hov ? "30" : "15");
+        x.fillRect(rx, ry, rw, rh);
+      }
+
       x.shadowBlur = 0; x.setLineDash([]);
+      // Label
+      const rx = ir.x + co.nx * ir.w, ry = ir.y + co.ny * ir.h;
       const lb = a.defect_class + " (" + a.severity + ")";
       x.font = "bold 10px Inter";
       const tw = x.measureText(lb).width + 8;
@@ -111,6 +131,20 @@ export default function ViewerPage() {
       x.strokeRect(r.x, r.y, r.w, r.h);
       x.fillStyle = "rgba(224,108,0,0.1)"; x.fillRect(r.x, r.y, r.w, r.h);
       x.setLineDash([]);
+    }
+    // Draw live freehand path
+    if (freehandRef.current.length > 1) {
+      const pts = freehandRef.current;
+      x.beginPath();
+      x.moveTo(pts[0].x, pts[0].y);
+      for (let i = 1; i < pts.length; i++) {
+        x.lineTo(pts[i].x, pts[i].y);
+      }
+      x.strokeStyle = "rgba(255, 69, 58, 0.9)";
+      x.lineWidth = 2;
+      x.lineCap = "round";
+      x.lineJoin = "round";
+      x.stroke();
     }
   }, [annotations, hoveredAnnot, zoom, selectedImg, imageUrl]);
 
@@ -166,9 +200,98 @@ export default function ViewerPage() {
     return () => { c.removeEventListener("mousedown", dn); c.removeEventListener("mousemove", mv); c.removeEventListener("mouseup", up); };
   }, [tool, defectType, severity, description, selectedImg, redraw]);
 
+  // ═══ FREEHAND DRAWING (CRAYON) TOOL ═══
   useEffect(() => {
     const c = canvasRef.current;
-    if (c) c.style.cursor = tool === "pan" ? "grab" : "crosshair";
+    if (!c || tool !== "draw") return;
+    c.style.cursor = "crosshair";
+    let drawing = false;
+    const dn = (e: MouseEvent) => {
+      if (!loadedImgRef.current) return;
+      drawing = true;
+      const r = c.getBoundingClientRect();
+      freehandRef.current = [{ x: e.clientX - r.left, y: e.clientY - r.top }];
+    };
+    const mv = (e: MouseEvent) => {
+      if (!drawing) return;
+      const r = c.getBoundingClientRect();
+      freehandRef.current.push({ x: e.clientX - r.left, y: e.clientY - r.top });
+      redraw();
+    };
+    const up = () => {
+      if (!drawing) return;
+      drawing = false;
+      const pts = [...freehandRef.current];
+      freehandRef.current = [];
+      if (pts.length < 5) { redraw(); return; }
+      const ir = irRef.current;
+      if (ir.w === 0) return;
+      const xs = pts.map(p => p.x), ys = pts.map(p => p.y);
+      const minX = Math.min(...xs), maxX = Math.max(...xs);
+      const minY = Math.min(...ys), maxY = Math.max(...ys);
+      if (maxX - minX < 10 || maxY - minY < 10) { redraw(); return; }
+      const nx = Math.max(0, Math.min(1, (minX - ir.x) / ir.w));
+      const ny = Math.max(0, Math.min(1, (minY - ir.y) / ir.h));
+      const nw = Math.max(0, Math.min(1 - nx, (maxX - minX) / ir.w));
+      const nh = Math.max(0, Math.min(1 - ny, (maxY - minY) / ir.h));
+      const polyPoints = pts.filter((_, i) => i % 3 === 0).map(p => ({
+        x: Math.max(0, Math.min(1, (p.x - ir.x) / ir.w)),
+        y: Math.max(0, Math.min(1, (p.y - ir.y) / ir.h)),
+      }));
+      setAnnotations(p => [...p, {
+        image_id: selectedImg?.id || "", shape: "polygon",
+        coordinates: { nx, ny, nw, nh, polygon: polyPoints }, defect_class: defectType,
+        severity: severity as any, description: (description || "") + " [freehand]",
+        _fabricId: "ann_" + Date.now(), _saved: false,
+      }]);
+      redraw();
+    };
+    c.addEventListener("mousedown", dn);
+    c.addEventListener("mousemove", mv);
+    c.addEventListener("mouseup", up);
+    return () => { c.removeEventListener("mousedown", dn); c.removeEventListener("mousemove", mv); c.removeEventListener("mouseup", up); };
+  }, [tool, defectType, severity, description, selectedImg, redraw]);
+
+  // ═══ PAN (MAIN) TOOL ═══
+  useEffect(() => {
+    const c = canvasRef.current;
+    if (!c || tool !== "pan") return;
+    c.style.cursor = "grab";
+    let panning = false;
+    let lastPos = { x: 0, y: 0 };
+
+    const dn = (e: MouseEvent) => {
+      panning = true;
+      lastPos = { x: e.clientX, y: e.clientY };
+      c.style.cursor = "grabbing";
+    };
+
+    const mv = (e: MouseEvent) => {
+      if (!panning) return;
+      const dx = e.clientX - lastPos.x;
+      const dy = e.clientY - lastPos.y;
+      panOffsetRef.current = {
+        x: panOffsetRef.current.x + dx,
+        y: panOffsetRef.current.y + dy,
+      };
+      lastPos = { x: e.clientX, y: e.clientY };
+      redraw();
+    };
+
+    const up = () => {
+      panning = false;
+      c.style.cursor = "grab";
+    };
+
+    c.addEventListener("mousedown", dn);
+    c.addEventListener("mousemove", mv);
+    c.addEventListener("mouseup", up);
+    return () => { c.removeEventListener("mousedown", dn); c.removeEventListener("mousemove", mv); c.removeEventListener("mouseup", up); };
+  }, [tool, redraw]);
+
+  useEffect(() => {
+    const c = canvasRef.current;
+    if (c) c.style.cursor = tool === "pan" ? "grab" : tool === "draw" ? "crosshair" : "crosshair";
   }, [tool]);
 
   async function save() {
@@ -254,11 +377,11 @@ export default function ViewerPage() {
           <div className="card-header">
             <span className="card-title"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" strokeWidth="2"><rect x="3" y="3" width="18" height="18" rx="2" /></svg>Editeur Interactif</span>
             <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-              {(["pan", "rect", "draw"] as const).map(t => <button key={t} className={"btn btn-sm " + (tool === t ? "btn-primary" : "btn-secondary")} onClick={() => setTool(t)}>{t === "pan" ? "Main" : t === "rect" ? "BBox" : "Crayon"}</button>)}
+              {(["pan", "rect", "draw"] as const).map(t => <button key={t} className={"btn btn-sm " + (tool === t ? "btn-primary" : "btn-secondary")} onClick={() => setTool(t)}>{t === "pan" ? "✋ Main" : t === "rect" ? "⬜ BBox" : "✏️ Crayon"}</button>)}
               <div style={{ width: 1, height: 20, background: "var(--border)", margin: "0 4px" }} />
               <span style={{ fontSize: 11, color: "var(--text3)" }}>Zoom: {zoom}%</span>
               <input type="range" min="50" max="300" value={zoom} onChange={e => setZoom(Number(e.target.value))} style={{ width: 80, accentColor: "var(--accent)" }} />
-              <button className="btn btn-sm btn-secondary" onClick={() => setZoom(100)}>Reset</button>
+              <button className="btn btn-sm btn-secondary" onClick={() => { setZoom(100); panOffsetRef.current = { x: 0, y: 0 }; redraw(); }}>Reset</button>
             </div>
           </div>
           <div ref={containerRef} className="viz-placeholder" style={{ flex: 1, minHeight: 420, position: "relative", overflow: "hidden", background: "#0D0E1A" }}>

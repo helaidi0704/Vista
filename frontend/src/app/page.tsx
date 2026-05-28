@@ -54,7 +54,7 @@ export default function HomePage() {
           </div>
           <h2 style={{
             fontSize: 28, fontWeight: 800, marginBottom: 10,
-            background: "linear-gradient(135deg, #F2F2F7, var(--accent2))",
+            background: "linear-gradient(135deg, var(--text), var(--accent2))",
             WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent", backgroundClip: "text",
           }}>
             Inspection Visuelle des Défauts Industriels

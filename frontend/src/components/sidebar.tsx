@@ -76,11 +76,11 @@ export function Sidebar() {
       <div style={{ padding: 16, borderTop: "1px solid var(--border)" }}>
         <div className="flex items-center gap-2.5" style={{ padding: 8, borderRadius: "var(--radius-sm)", background: "var(--bg3)" }}>
           <div className="flex items-center justify-center shrink-0" style={{ width: 32, height: 32, background: "linear-gradient(135deg, var(--accent), var(--cyan))", borderRadius: "50%", fontSize: 13, fontWeight: 700, color: "#fff" }}>
-            M
+            {(() => { try { const u = JSON.parse(localStorage.getItem("vista_user") || "{}"); return (u.full_name || "U")[0]; } catch { return "U"; } })()}
           </div>
           <div className="flex flex-col">
-            <span style={{ fontSize: 12, fontWeight: 600 }}>M. Seddar</span>
-            <span style={{ fontSize: 10, color: "var(--text3)" }}>Ingénieur Vision IA</span>
+            <span style={{ fontSize: 12, fontWeight: 600 }}>{(() => { try { return JSON.parse(localStorage.getItem("vista_user") || "{}").full_name || "Utilisateur"; } catch { return "Utilisateur"; } })()}</span>
+            <span style={{ fontSize: 10, color: "var(--text3)" }}>{(() => { try { return JSON.parse(localStorage.getItem("vista_user") || "{}").role || "user"; } catch { return "user"; } })()}</span>
           </div>
         </div>
       </div>
