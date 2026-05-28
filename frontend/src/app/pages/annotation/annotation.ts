@@ -5,14 +5,15 @@ import {
   ElementRef,
   HostListener,
   OnDestroy,
+  PLATFORM_ID,
   ViewChild,
+  inject,
   signal,
 } from '@angular/core';
-import { CommonModule } from '@angular/common';
+import { CommonModule, isPlatformBrowser } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 
 type Tool = 'pan' | 'rect' | 'polygon' | 'freehand';
-
 type SeverityUi = 'Critique' | 'Majeur' | 'Mineur';
 
 interface NormPoint {
@@ -52,6 +53,7 @@ interface AnnotationMeta {
 
 interface AnnotationItem extends AnnotationMeta {
   id: number;
+  imageId: string;
   geometry: Geometry;
 }
 
@@ -59,6 +61,33 @@ interface DraftShape {
   id: string;
   meta: AnnotationMeta;
   geometry: Geometry;
+}
+
+interface ImageModel {
+  id: string;
+  name: string;
+  src: string;            // dataURL or /assets/...
+  format: string;         // PNG/JPG/IMG
+  size?: number;          // bytes (uploads)
+  width: number;
+  height: number;
+  createdAt: string;      // ISO
+}
+
+interface PersistedAnnotationStateV1 {
+  version: 1;
+  currentImageId: string;
+  images: Record<string, ImageModel>;
+  annotationsByImageId: Record<string, AnnotationItem[]>;
+  viewByImageId: Record<string, { zoom: number; panOffset: { x: number; y: number } }>;
+}
+
+interface UndoState {
+  draftShapes: DraftShape[];
+  draftRectCurrent: { start: NormPoint; end: NormPoint; dragging: boolean } | null;
+  draftPolygonCurrent: { points: NormPoint[]; closed: boolean };
+  polygonPreview: NormPoint | null;
+  draftFreehandCurrent: { points: NormPoint[]; drawing: boolean };
 }
 
 @Component({
@@ -74,6 +103,15 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
   @ViewChild('drawCanvas', { static: true }) drawCanvas!: ElementRef<HTMLCanvasElement>;
   @ViewChild('fileInput', { static: true }) fileInput!: ElementRef<HTMLInputElement>;
 
+  private readonly platformId = inject(PLATFORM_ID);
+  private readonly isBrowser = isPlatformBrowser(this.platformId);
+
+  private readonly STORAGE_KEY = 'vista.viewer.annotation.v1';
+
+  private readonly DEFAULT_IMAGE_ID = 'asset_carter_moteur';
+  private readonly DEFAULT_IMAGE_SRC = '/assets/carter_moteur.png';
+  private readonly DEFAULT_IMAGE_NAME = 'carter_moteur_082.jpg';
+
   readonly defectOptions = [
     'Rayure profonde',
     'Fissure (micro)',
@@ -82,87 +120,65 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
     'Pièce manquante',
   ] as const;
 
+  // Viewer state
   zoom = signal(100);
   currentTool = signal<Tool>('rect');
-
-  private getZoomScale(): number {
-    return Math.max(0.1, this.zoom() / 100);
-  }
 
   selectedSeverity = signal<SeverityUi>('Mineur');
   annotationType = signal('Rayure profonde');
   annotationDesc = signal("Rayure profonde orientée à 45° sur la zone d'épaulement droite.");
 
-  imageFileName = signal('carter_moteur_082.jpg');
+  // Image UI (kept for template)
+  imageFileName = signal(this.DEFAULT_IMAGE_NAME);
   imageFileMeta = signal('RGB · 1920x1080 · 2.4 MB');
 
-  imageAnnotations = signal<AnnotationItem[]>([
-    {
-      id: 1,
-      shape: '🟥 BBox',
-      def: 'Rayure profonde',
-      sev: 'Critique',
-      scls: 'tag-red',
-      desc: 'Rayure importante sur la surface principale.',
-      geometry: { type: 'bbox', data: { nx: 0.45, ny: 0.35, nw: 0.15, nh: 0.3 } },
-    },
-    {
-      id: 2,
-      shape: '🔷 Polygon',
-      def: 'Fissure',
-      sev: 'Majeur',
-      scls: 'tag-orange',
-      desc: 'Micro-fissure en périphérie (zone B).',
-      geometry: {
-        type: 'polygon',
-        data: {
-          points: [
-            { nx: 0.38, ny: 0.35 },
-            { nx: 0.42, ny: 0.45 },
-            { nx: 0.4, ny: 0.55 },
-          ],
-          closed: true,
-        },
-      },
-    },
-  ]);
+  // Current image model
+  currentImage = signal<ImageModel | null>(null);
 
+  // Persisted annotations for CURRENT image only
+  imageAnnotations = signal<AnnotationItem[]>([]);
   hoveredAnnotId = signal<number | null>(null);
 
+  // Drafts + in-progress shapes
   private draftShapes: DraftShape[] = [];
   private draftRectCurrent: { start: NormPoint; end: NormPoint; dragging: boolean } | null = null;
   private draftPolygonCurrent: { points: NormPoint[]; closed: boolean } = { points: [], closed: false };
   private polygonPreview: NormPoint | null = null;
+  private draftFreehandCurrent: { points: NormPoint[]; drawing: boolean } = { points: [], drawing: false };
+
+  // Pan
   private panOffset = signal({ x: 0, y: 0 });
   private isPanning = false;
   private panStart = { x: 0, y: 0 };
   private panStartOffset = { x: 0, y: 0 };
-  private draftFreehandCurrent: { points: NormPoint[]; drawing: boolean } = { points: [], drawing: false };
 
+  // Rendering
   private loadedImageObj: HTMLImageElement | null = null;
   private imageRenderRect = { x: 0, y: 0, w: 0, h: 0 };
 
   private readonly CLOSE_TOL_PX = 14;
-  private nextAnnotationId = 3;
+  private nextAnnotationId = 1;
   private nextDraftId = 1;
 
+  // Pointer listeners
   private onPointerDownRef?: (e: PointerEvent) => void;
   private onPointerMoveRef?: (e: PointerEvent) => void;
   private onPointerUpRef?: (e: PointerEvent) => void;
-  private undoStack: any[] = [];
-  private redoStack: any[] = [];
+
+  // Undo/redo for drafts only
+  private undoStack: UndoState[] = [];
+  private redoStack: UndoState[] = [];
+
+  // Wheel zoom handler (focus under cursor, DOES NOT change tool)
   private onWheelZoom = (e: WheelEvent): void => {
     if (this.imageRenderRect.w === 0) return;
-
     e.preventDefault();
 
     const delta = -e.deltaY;
     const current = this.zoom();
 
     const factor = delta > 0 ? 1.1 : 0.9;
-    let next = current * factor;
-    next = Math.round(Math.max(20, Math.min(1200, next)));
-
+    let next = Math.round(Math.max(20, Math.min(1200, current * factor)));
     if (next === current) return;
 
     const canvasPos = this.pointerToCanvasPosition(e);
@@ -172,29 +188,52 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
     const iw = this.imageRenderRect.w;
     const ih = this.imageRenderRect.h;
 
-    const nx = (canvasPos.x - ix) / iw;
-    const ny = (canvasPos.y - iy) / ih;
+    // normalized position within current rendered image
+    const u = (canvasPos.x - ix) / iw;
+    const v = (canvasPos.y - iy) / ih;
 
+    // set zoom
     this.zoom.set(next);
 
-    // Recompute image with new zoom
+    // First redraw to compute new imageRenderRect with same panOffset
     this.drawBaseImage();
 
-    // Adjust panOffset so that cursor stays on same image point
-    const targetX = canvasPos.x - nx * this.imageRenderRect.w;
-    const targetY = canvasPos.y - ny * this.imageRenderRect.h;
+    // Compute baseX/baseY from current rect and panOffset: x = baseX + panOffset.x
+    const baseX = this.imageRenderRect.x - this.panOffset().x;
+    const baseY = this.imageRenderRect.y - this.panOffset().y;
 
-    const pan = this.panOffset();
-    this.panOffset.set({ x: pan.x + (targetX - this.imageRenderRect.x), y: pan.y + (targetY - this.imageRenderRect.y) });
+    // We want: canvasPos.x = newX + u*newW, where newX = baseX + newPanX
+    const newW = this.imageRenderRect.w;
+    const newH = this.imageRenderRect.h;
 
+    const desiredX = canvasPos.x - u * newW;
+    const desiredY = canvasPos.y - v * newH;
+
+    this.panOffset.set({
+      x: desiredX - baseX,
+      y: desiredY - baseY,
+    });
+
+    // redraw (drawBaseImage clamps panOffset)
     this.drawBaseImage();
     this.drawAnnotationsOnly();
+    this.persistState(); // persist view (wheel modifies zoom+pan)
   };
 
   ngAfterViewInit(): void {
     setTimeout(() => {
-      this.loadDefaultImage();
       this.setupDrawingInteraction();
+
+      if (this.isBrowser && this.restoreFromStorage()) {
+        const img = this.currentImage();
+        if (img) this.loadImageFromSrc(img.src, true);
+      } else {
+        this.setDefaultImageAndSeed();
+        this.persistState();
+        const img = this.currentImage();
+        if (img) this.loadImageFromSrc(img.src, true);
+      }
+
       this.drawBaseImage();
       this.drawAnnotationsOnly();
     }, 50);
@@ -210,6 +249,8 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
     canvas.removeEventListener('wheel', this.onWheelZoom);
   }
 
+  // ---------------- UI actions ----------------
+
   setTool(tool: Tool): void {
     this.currentTool.set(tool);
     this.polygonPreview = null;
@@ -218,88 +259,6 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
 
   setSeverity(severity: SeverityUi): void {
     this.selectedSeverity.set(severity);
-  }
-
-  @HostListener('window:keydown', ['$event'])
-  onKeyDown(e: KeyboardEvent): void {
-    const key = e.key.toLowerCase();
-
-    // Undo (Ctrl+Z or Cmd+Z)
-    if ((e.ctrlKey || e.metaKey) && !e.shiftKey && key === 'z') {
-      e.preventDefault();
-      e.stopPropagation();
-      this.undo();
-      return;
-    }
-
-    // Redo (Ctrl+Y OR Ctrl+Shift+Z)
-    if (
-      (e.ctrlKey || e.metaKey) &&
-      (key === 'y' || (key === 'z' && e.shiftKey))
-    ) {
-      e.preventDefault();
-      e.stopPropagation();
-      this.redo();
-      return;
-    }
-  }
-
-  hoverAnnotation(id: number, isEnter: boolean): void {
-    this.hoveredAnnotId.set(isEnter ? id : null);
-    this.drawAnnotationsOnly();
-  }
-
-  deleteAnnotation(id: number): void {
-    this.imageAnnotations.update((annots) => annots.filter((annot) => annot.id !== id));
-    if (this.hoveredAnnotId() === id) this.hoveredAnnotId.set(null);
-    this.drawAnnotationsOnly();
-  }
-
-  resetDrafts(): void {
-    this.pushHistory();
-    this.draftShapes = [];
-    this.draftRectCurrent = null;
-    this.draftPolygonCurrent = { points: [], closed: false };
-    this.polygonPreview = null;
-    this.draftFreehandCurrent = { points: [], drawing: false };
-    this.drawAnnotationsOnly();
-  }
-
-  saveAnnotation(): void {
-    if (this.draftShapes.length === 0) {
-      if (this.hasInProgressShape()) {
-        this.resetDrafts();
-        alert("Aucun draft finalisé à enregistrer. Le dessin en cours a été réinitialisé.");
-        return;
-      }
-
-      alert("Aucune forme à enregistrer. Dessine une BBox, un Polygon ou un tracé libre d'abord.");
-      return;
-    }
-
-    const startId = this.nextAnnotationId;
-    const committed: AnnotationItem[] = this.draftShapes.map((draft, index) => ({
-      id: startId + index,
-      ...draft.meta,
-      geometry: draft.geometry,
-    }));
-
-    this.nextAnnotationId += committed.length;
-    this.imageAnnotations.update((prev) => [...prev, ...committed]);
-    this.resetDrafts();
-  }
-
-  openImagePicker(): void {
-    this.fileInput.nativeElement.click();
-  }
-
-  onFileSelected(event: Event): void {
-    const input = event.target as HTMLInputElement;
-    const file = input.files?.[0];
-    if (!file) return;
-
-    this.loadImageFile(file);
-    input.value = '';
   }
 
   updateAnnotationType(value: string): void {
@@ -314,97 +273,42 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
     const input = event.target as HTMLInputElement;
     const value = Number(input.value);
     let next = Number.isFinite(value) ? value : 100;
-
     next = Math.round(Math.max(20, Math.min(1200, next)));
 
     this.zoom.set(next);
-
-    // auto switch to pan tool
+    // slider zoom => auto switch to pan
     this.currentTool.set('pan');
 
     this.drawBaseImage();
     this.drawAnnotationsOnly();
+    this.persistState();
   }
 
   resetZoom(): void {
     this.zoom.set(100);
     this.drawBaseImage();
     this.drawAnnotationsOnly();
+    this.persistState();
   }
 
-  private snapshotState(): any {
-    return {
-      draftShapes: JSON.parse(JSON.stringify(this.draftShapes)),
-      draftPolygonCurrent: JSON.parse(JSON.stringify(this.draftPolygonCurrent)),
-      draftFreehandCurrent: JSON.parse(JSON.stringify(this.draftFreehandCurrent)),
-    };
-  }
-
-  private restoreState(state: any): void {
-    this.draftShapes = state.draftShapes;
-    this.draftPolygonCurrent = state.draftPolygonCurrent;
-    this.draftFreehandCurrent = state.draftFreehandCurrent;
-
+  hoverAnnotation(id: number, isEnter: boolean): void {
+    this.hoveredAnnotId.set(isEnter ? id : null);
     this.drawAnnotationsOnly();
   }
 
-  private pushHistory(): void {
-    this.undoStack.push(this.snapshotState());
-    this.redoStack = [];
-  }
-
-  undo(): void {
-    if (this.undoStack.length === 0) return;
-
-    const current = this.snapshotState();
-    this.redoStack.push(current);
-
-    const prev = this.undoStack.pop();
-    this.restoreState(prev);
-  }
-
-  redo(): void {
-    if (this.redoStack.length === 0) return;
-
-    const current = this.snapshotState();
-    this.undoStack.push(current);
-
-    const next = this.redoStack.pop();
-    this.restoreState(next);
-  }
-
-  currentToolLabel(): string {
-    switch (this.currentTool()) {
-      case 'pan':
-        return 'Navigation';
-      case 'rect':
-        return 'BBox';
-      case 'polygon':
-        return 'Polygon';
-      case 'freehand':
-        return 'Tracé libre';
-    }
-  }
-
-  currentLayerLabel(): string {
-    if (this.draftRectCurrent?.dragging) return 'Preview BBox';
-    if (this.draftPolygonCurrent.points.length > 0) return `Polygon (${this.draftPolygonCurrent.points.length} points)`;
-    if (this.draftFreehandCurrent.drawing) return `Tracé libre (${this.draftFreehandCurrent.points.length} points)`;
-    if (this.draftShapes.length > 0) return `${this.draftShapes.length} draft(s) en attente`;
-    return 'Aucun draft actif';
+  deleteAnnotation(id: number): void {
+    this.imageAnnotations.update((annots) => annots.filter((a) => a.id !== id));
+    if (this.hoveredAnnotId() === id) this.hoveredAnnotId.set(null);
+    this.persistState();
+    this.drawAnnotationsOnly();
   }
 
   draftCount(): number {
     return this.draftShapes.length;
   }
 
-  hasInProgressShape(): boolean {
-    return !!this.draftRectCurrent?.dragging || this.draftPolygonCurrent.points.length > 0 || this.draftFreehandCurrent.drawing;
-  }
-
   cursorStyle(): string {
     if (this.currentTool() === 'pan') return this.isPanning ? 'grabbing' : 'grab';
-
     switch (this.currentTool()) {
       case 'rect':
       case 'polygon':
@@ -420,55 +324,372 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
     return ann.id;
   }
 
+  openImagePicker(): void {
+    this.fileInput.nativeElement.click();
+  }
+
+  onFileSelected(event: Event): void {
+    const input = event.target as HTMLInputElement;
+    const file = input.files?.[0];
+    if (!file) return;
+
+    this.loadImageFile(file);
+    input.value = '';
+  }
+
+  // ---------------- Undo / Redo (draft-level) ----------------
+
+  @HostListener('window:keydown', ['$event'])
+  onKeyDown(e: KeyboardEvent): void {
+    const key = e.key.toLowerCase();
+
+    if ((e.ctrlKey || e.metaKey) && !e.shiftKey && key === 'z') {
+      e.preventDefault();
+      e.stopPropagation();
+      this.undo();
+      return;
+    }
+
+    if ((e.ctrlKey || e.metaKey) && (key === 'y' || (key === 'z' && e.shiftKey))) {
+      e.preventDefault();
+      e.stopPropagation();
+      this.redo();
+    }
+  }
+
+  private snapshotState(): UndoState {
+    // deep clone (draft-only)
+    return JSON.parse(
+      JSON.stringify({
+        draftShapes: this.draftShapes,
+        draftRectCurrent: this.draftRectCurrent,
+        draftPolygonCurrent: this.draftPolygonCurrent,
+        polygonPreview: this.polygonPreview,
+        draftFreehandCurrent: this.draftFreehandCurrent,
+      } satisfies UndoState),
+    ) as UndoState;
+  }
+
+  private restoreState(state: UndoState): void {
+    this.draftShapes = state.draftShapes ?? [];
+    this.draftRectCurrent = state.draftRectCurrent ?? null;
+    this.draftPolygonCurrent = state.draftPolygonCurrent ?? { points: [], closed: false };
+    this.polygonPreview = state.polygonPreview ?? null;
+    this.draftFreehandCurrent = state.draftFreehandCurrent ?? { points: [], drawing: false };
+
+    this.drawAnnotationsOnly();
+  }
+
+  private pushHistory(): void {
+    this.undoStack.push(this.snapshotState());
+    this.redoStack = [];
+    // optional cap
+    if (this.undoStack.length > 80) this.undoStack.shift();
+  }
+
+  undo(): void {
+    if (this.undoStack.length === 0) return;
+
+    const current = this.snapshotState();
+    this.redoStack.push(current);
+
+    const prev = this.undoStack.pop();
+    if (prev) this.restoreState(prev);
+  }
+
+  redo(): void {
+    if (this.redoStack.length === 0) return;
+
+    const current = this.snapshotState();
+    this.undoStack.push(current);
+
+    const next = this.redoStack.pop();
+    if (next) this.restoreState(next);
+  }
+
+  // ---------------- Draft lifecycle ----------------
+
+  private clearDraftsNoHistory(): void {
+    this.draftShapes = [];
+    this.draftRectCurrent = null;
+    this.draftPolygonCurrent = { points: [], closed: false };
+    this.polygonPreview = null;
+    this.draftFreehandCurrent = { points: [], drawing: false };
+  }
+
+  private resetTransientAnnotationState(): void {
+    this.clearDraftsNoHistory();
+    this.hoveredAnnotId.set(null);
+
+    this.isPanning = false;
+    this.panStart = { x: 0, y: 0 };
+    this.panStartOffset = { x: 0, y: 0 };
+
+    this.undoStack = [];
+    this.redoStack = [];
+  }
+
+  resetDrafts(): void {
+    const hasAnyDraft =
+      this.draftShapes.length > 0 ||
+      !!this.draftRectCurrent?.dragging ||
+      this.draftPolygonCurrent.points.length > 0 ||
+      this.draftFreehandCurrent.drawing;
+
+    if (hasAnyDraft) this.pushHistory();
+
+    this.clearDraftsNoHistory();
+    this.drawAnnotationsOnly();
+  }
+
+  saveAnnotation(): void {
+    if (this.draftShapes.length === 0) {
+      if (this.hasInProgressShape()) {
+        this.resetDrafts();
+        alert("Aucun draft finalisé à enregistrer. Le dessin en cours a été réinitialisé.");
+        return;
+      }
+      alert("Aucune forme à enregistrer. Dessine une BBox, un Polygon ou un tracé libre d'abord.");
+      return;
+    }
+
+    const imgId = this.currentImage()?.id ?? 'unknown';
+    const startId = this.nextAnnotationId;
+
+    const committed: AnnotationItem[] = this.draftShapes.map((draft, index) => ({
+      id: startId + index,
+      imageId: imgId,
+      ...draft.meta,
+      geometry: draft.geometry,
+    }));
+
+    this.nextAnnotationId += committed.length;
+    this.imageAnnotations.update((prev) => [...prev, ...committed]);
+
+    // persist and clear drafts WITHOUT history (avoid undo resurrecting saved drafts)
+    this.persistState();
+    this.clearDraftsNoHistory();
+    this.undoStack = [];
+    this.redoStack = [];
+    this.drawAnnotationsOnly();
+  }
+
+  private hasInProgressShape(): boolean {
+    return !!this.draftRectCurrent?.dragging || this.draftPolygonCurrent.points.length > 0 || this.draftFreehandCurrent.drawing;
+  }
+
+  // ---------------- Persistence (localStorage) ----------------
+
+  private readState(): PersistedAnnotationStateV1 | null {
+    if (!this.isBrowser) return null;
+    try {
+      const raw = localStorage.getItem(this.STORAGE_KEY);
+      if (!raw) return null;
+
+      const parsed = JSON.parse(raw) as Partial<PersistedAnnotationStateV1>;
+      if (parsed.version !== 1 || typeof parsed.currentImageId !== 'string') return null;
+      if (!parsed.images || !parsed.annotationsByImageId || !parsed.viewByImageId) return null;
+
+      return parsed as PersistedAnnotationStateV1;
+    } catch {
+      return null;
+    }
+  }
+
+  private persistState(): void {
+    if (!this.isBrowser) return;
+    const img = this.currentImage();
+    if (!img) return;
+
+    const prev = this.readState();
+    const state: PersistedAnnotationStateV1 = {
+      version: 1,
+      currentImageId: img.id,
+      images: { ...(prev?.images ?? {}), [img.id]: img },
+      annotationsByImageId: { ...(prev?.annotationsByImageId ?? {}), [img.id]: this.imageAnnotations() },
+      viewByImageId: {
+        ...(prev?.viewByImageId ?? {}),
+        [img.id]: { zoom: this.zoom(), panOffset: this.panOffset() },
+      },
+    };
+
+    try {
+      localStorage.setItem(this.STORAGE_KEY, JSON.stringify(state));
+    } catch {
+      // ignore quota
+    }
+  }
+
+  private restoreFromStorage(): boolean {
+    if (!this.isBrowser) return false;
+    const state = this.readState();
+    if (!state) return false;
+
+    const img = state.images[state.currentImageId];
+    if (!img) return false;
+
+    // clean transient state for image context
+    this.resetTransientAnnotationState();
+
+    this.currentImage.set(img);
+    this.zoom.set(state.viewByImageId?.[img.id]?.zoom ?? 100);
+    this.panOffset.set(state.viewByImageId?.[img.id]?.panOffset ?? { x: 0, y: 0 });
+
+    const ann = state.annotationsByImageId?.[img.id] ?? [];
+    this.imageAnnotations.set(ann.map((a) => ({ ...a, imageId: a.imageId ?? img.id })));
+    this.syncNextAnnotationId();
+
+    this.imageFileName.set(img.name);
+    this.imageFileMeta.set(`${img.format} · ${img.width}x${img.height}`);
+
+    return true;
+  }
+
+  private setDefaultImageAndSeed(): void {
+    this.resetTransientAnnotationState();
+
+    const img: ImageModel = {
+      id: this.DEFAULT_IMAGE_ID,
+      name: this.DEFAULT_IMAGE_NAME,
+      src: this.DEFAULT_IMAGE_SRC,
+      format: 'PNG',
+      size: undefined,
+      width: 0,
+      height: 0,
+      createdAt: new Date().toISOString(),
+    };
+
+    this.currentImage.set(img);
+    this.imageFileName.set(img.name);
+    this.imageFileMeta.set('PNG · —');
+
+    // demo seed annotations (default image only)
+    this.imageAnnotations.set([
+      {
+        id: 1,
+        imageId: img.id,
+        shape: '🟥 BBox',
+        def: 'Rayure profonde',
+        sev: 'Critique',
+        scls: 'tag-red',
+        desc: 'Rayure importante sur la surface principale.',
+        geometry: { type: 'bbox', data: { nx: 0.45, ny: 0.35, nw: 0.15, nh: 0.3 } },
+      },
+      {
+        id: 2,
+        imageId: img.id,
+        shape: '🔷 Polygon',
+        def: 'Fissure',
+        sev: 'Majeur',
+        scls: 'tag-orange',
+        desc: 'Micro-fissure en périphérie (zone B).',
+        geometry: {
+          type: 'polygon',
+          data: {
+            points: [
+              { nx: 0.38, ny: 0.35 },
+              { nx: 0.42, ny: 0.45 },
+              { nx: 0.4, ny: 0.55 },
+            ],
+            closed: true,
+          },
+        },
+      },
+    ]);
+
+    this.zoom.set(100);
+    this.panOffset.set({ x: 0, y: 0 });
+    this.syncNextAnnotationId();
+  }
+
+  private syncNextAnnotationId(): void {
+    const maxId = this.imageAnnotations().reduce((max, a) => Math.max(max, a.id), 0);
+    this.nextAnnotationId = Math.max(1, maxId + 1);
+  }
+
+  private newImageId(prefix: string): string {
+    return `${prefix}_${Date.now()}_${Math.random().toString(16).slice(2)}`;
+  }
+
+  private loadImageFile(file: File): void {
+    const reader = new FileReader();
+    reader.onload = () => {
+      if (typeof reader.result !== 'string') return;
+      const src = reader.result;
+
+      // new image context -> reset transient state
+      this.resetTransientAnnotationState();
+
+      const img: ImageModel = {
+        id: this.newImageId('upload'),
+        name: file.name,
+        src,
+        format: this.fileTypeLabel(file.type),
+        size: file.size,
+        width: 0,
+        height: 0,
+        createdAt: new Date().toISOString(),
+      };
+
+      this.currentImage.set(img);
+      this.imageAnnotations.set([]);
+      this.syncNextAnnotationId();
+
+      // reset view for new image
+      this.zoom.set(100);
+      this.panOffset.set({ x: 0, y: 0 });
+
+      this.imageFileName.set(img.name);
+      this.imageFileMeta.set(`${img.format} · — · ${this.formatBytes(file.size)}`);
+
+      this.persistState();
+      this.loadImageFromSrc(src, true);
+    };
+    reader.readAsDataURL(file);
+  }
+
+  private loadImageFromSrc(src: string, updateMeta: boolean): void {
+    const imgEl = new Image();
+    imgEl.src = src;
+
+    imgEl.onload = () => {
+      this.loadedImageObj = imgEl;
+
+      const ci = this.currentImage();
+      if (ci) {
+        const updated: ImageModel = { ...ci, width: imgEl.width, height: imgEl.height };
+        this.currentImage.set(updated);
+
+        if (updateMeta) {
+          this.imageFileName.set(updated.name);
+          const sizePart = updated.size != null ? ` · ${this.formatBytes(updated.size)}` : '';
+          this.imageFileMeta.set(`${updated.format} · ${updated.width}x${updated.height}${sizePart}`);
+        }
+
+        this.persistState();
+      }
+
+      this.drawBaseImage();
+      this.drawAnnotationsOnly();
+    };
+
+    imgEl.onerror = () => {
+      this.loadedImageObj = null;
+      this.drawBaseImage();
+      this.drawAnnotationsOnly();
+    };
+  }
+
+  // ---------------- Rendering ----------------
+
   @HostListener('window:resize')
   onResize(): void {
     this.drawBaseImage();
     this.drawAnnotationsOnly();
   }
 
-  private loadImageFile(file: File): void {
-    const reader = new FileReader();
-    reader.onload = () => {
-      const img = new Image();
-      img.onload = () => {
-        this.loadedImageObj = img;
-        this.imageFileName.set(file.name);
-        this.imageFileMeta.set(`${this.fileTypeLabel(file.type)} · ${img.width}x${img.height} · ${this.formatBytes(file.size)}`);
-        this.drawBaseImage();
-        this.drawAnnotationsOnly();
-      };
-      img.src = reader.result as string;
-    };
-    reader.readAsDataURL(file);
-  }
-
-  private fileTypeLabel(mime: string): string {
-    const short = mime.replace('image/', '').toUpperCase();
-    return short || 'IMG';
-  }
-
-  private formatBytes(bytes: number): string {
-    const kb = 1024;
-    const mb = kb * 1024;
-    if (bytes >= mb) return `${(bytes / mb).toFixed(1)} MB`;
-    if (bytes >= kb) return `${(bytes / kb).toFixed(1)} KB`;
-    return `${bytes} B`;
-  }
-
-  private loadDefaultImage(): void {
-    const img = new Image();
-    img.src = '/assets/carter_moteur.png';
-    img.onload = () => {
-      this.loadedImageObj = img;
-      this.imageFileName.set('carter_moteur_082.jpg');
-      this.imageFileMeta.set(`RGB · ${img.width}x${img.height}`);
-      this.drawBaseImage();
-      this.drawAnnotationsOnly();
-    };
-    img.onerror = () => {
-      this.drawBaseImage();
-      this.drawAnnotationsOnly();
-    };
+  private getZoomScale(): number {
+    return Math.max(0.1, this.zoom() / 100);
   }
 
   private drawBaseImage(): void {
@@ -492,7 +713,6 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
     ctx.clearRect(0, 0, width, height);
 
     if (!this.loadedImageObj) {
-      // Fallback: no image loaded yet -> allow drawing on the full canvas surface
       ctx.fillStyle = '#0D0E1A';
       ctx.fillRect(0, 0, width, height);
       this.imageRenderRect = { x: 0, y: 0, w: width, h: height };
@@ -507,16 +727,18 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
     if (imgRatio > cvRatio) drawHeight = width / imgRatio;
     else drawWidth = height * imgRatio;
 
-    // Apply zoom around center
+    // zoom
     const scale = this.getZoomScale();
     drawWidth *= scale;
     drawHeight *= scale;
 
     const baseX = (width - drawWidth) / 2;
     const baseY = (height - drawHeight) / 2;
+
     const pan = this.panOffset();
     let nextPanX = pan.x;
     let nextPanY = pan.y;
+
     let x = baseX + nextPanX;
     let y = baseY + nextPanY;
 
@@ -546,21 +768,183 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
       this.panOffset.set({ x: nextPanX, y: nextPanY });
     }
 
-    this.imageRenderRect = {
-      x,
-      y,
-      w: drawWidth,
-      h: drawHeight,
-    };
+    this.imageRenderRect = { x, y, w: drawWidth, h: drawHeight };
 
-    ctx.drawImage(
-      this.loadedImageObj,
-      this.imageRenderRect.x,
-      this.imageRenderRect.y,
-      this.imageRenderRect.w,
-      this.imageRenderRect.h
-    );
+    ctx.drawImage(this.loadedImageObj, this.imageRenderRect.x, this.imageRenderRect.y, this.imageRenderRect.w, this.imageRenderRect.h);
   }
+
+  private drawAnnotationsOnly(): void {
+    const drawCanvas = this.drawCanvas.nativeElement;
+    const ctx = drawCanvas.getContext('2d');
+    if (!ctx) return;
+
+    ctx.clearRect(0, 0, drawCanvas.width, drawCanvas.height);
+    if (this.imageRenderRect.w === 0) return;
+
+    // persisted
+    for (const ann of this.imageAnnotations()) {
+      this.drawGeometry(ctx, ann.geometry, ann.id, ann.scls, ann.def, false);
+    }
+
+    // drafts
+    for (const draft of this.draftShapes) {
+      this.drawGeometry(ctx, draft.geometry, -1, 'draft', draft.meta.def, true);
+    }
+
+    // rect preview
+    if (this.draftRectCurrent?.dragging) {
+      const bbox = this.rectToBbox(this.draftRectCurrent.start, this.draftRectCurrent.end);
+      if (bbox) this.drawGeometry(ctx, { type: 'bbox', data: bbox }, -2, 'draft', 'Draft', true);
+    }
+
+    // polygon preview + handles
+    if (this.draftPolygonCurrent.points.length > 0) {
+      this.drawDraftPolygonOverlay(ctx);
+    }
+
+    // freehand preview stroke
+    if (this.draftFreehandCurrent.drawing && this.draftFreehandCurrent.points.length > 1) {
+      const geometry: Geometry = { type: 'freehand', data: { points: this.draftFreehandCurrent.points, closed: false } };
+      this.drawGeometry(ctx, geometry, -3, 'draft', 'Draft', true);
+    }
+  }
+
+  private drawGeometry(
+    ctx: CanvasRenderingContext2D,
+    geometry: Geometry,
+    annId: number,
+    sevClass: 'tag-red' | 'tag-orange' | 'tag-cyan' | 'draft',
+    label: string,
+    isDraft: boolean,
+  ): void {
+    const hovered = !isDraft && this.hoveredAnnotId() === annId;
+    const colors = this.getColors(sevClass);
+
+    ctx.save();
+    ctx.lineJoin = 'round';
+    ctx.lineCap = 'round';
+    ctx.lineWidth = hovered ? 3 : 2;
+    ctx.strokeStyle = colors.main;
+    ctx.fillStyle = colors.fill;
+
+    if (hovered) {
+      ctx.shadowColor = colors.main;
+      ctx.shadowBlur = 10;
+    }
+
+    const ix = this.imageRenderRect.x;
+    const iy = this.imageRenderRect.y;
+    const iw = this.imageRenderRect.w;
+    const ih = this.imageRenderRect.h;
+
+    if (geometry.type === 'bbox') {
+      const d = geometry.data;
+      const rx = ix + d.nx * iw;
+      const ry = iy + d.ny * ih;
+      const rw = d.nw * iw;
+      const rh = d.nh * ih;
+
+      ctx.fillRect(rx, ry, rw, rh);
+      ctx.strokeRect(rx, ry, rw, rh);
+
+      if (!isDraft) {
+        ctx.shadowBlur = 0;
+        ctx.font = 'bold 10px Inter, sans-serif';
+        const tw = ctx.measureText(label).width + 8;
+        ctx.fillStyle = colors.main;
+        ctx.fillRect(rx, ry - 16, tw, 16);
+        ctx.fillStyle = '#121316';
+        ctx.fillText(label, rx + 4, ry - 4);
+      }
+
+      ctx.restore();
+      return;
+    }
+
+    const pts = geometry.data.points;
+    if (pts.length < 2) {
+      ctx.restore();
+      return;
+    }
+
+    ctx.beginPath();
+    pts.forEach((pt, idx) => {
+      const px = ix + pt.nx * iw;
+      const py = iy + pt.ny * ih;
+      if (idx === 0) ctx.moveTo(px, py);
+      else ctx.lineTo(px, py);
+    });
+
+    if (geometry.type === 'polygon') {
+      ctx.closePath();
+      ctx.fill();
+    }
+
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  private drawDraftPolygonOverlay(ctx: CanvasRenderingContext2D): void {
+    const ix = this.imageRenderRect.x;
+    const iy = this.imageRenderRect.y;
+    const iw = this.imageRenderRect.w;
+    const ih = this.imageRenderRect.h;
+
+    ctx.save();
+    ctx.lineJoin = 'round';
+    ctx.lineCap = 'round';
+    ctx.lineWidth = 2;
+    ctx.strokeStyle = '#E06C00';
+
+    ctx.beginPath();
+    this.draftPolygonCurrent.points.forEach((pt, idx) => {
+      const px = ix + pt.nx * iw;
+      const py = iy + pt.ny * ih;
+      if (idx === 0) ctx.moveTo(px, py);
+      else ctx.lineTo(px, py);
+    });
+
+    if (this.polygonPreview) {
+      ctx.lineTo(ix + this.polygonPreview.nx * iw, iy + this.polygonPreview.ny * ih);
+    }
+    ctx.stroke();
+
+    // handles
+    for (const pt of this.draftPolygonCurrent.points) {
+      const px = ix + pt.nx * iw;
+      const py = iy + pt.ny * ih;
+      ctx.beginPath();
+      ctx.arc(px, py, 4, 0, Math.PI * 2);
+      ctx.fillStyle = '#FFFFFF';
+      ctx.fill();
+      ctx.strokeStyle = '#E06C00';
+      ctx.lineWidth = 1;
+      ctx.stroke();
+    }
+
+    // tolerance circle first point
+    if (this.draftPolygonCurrent.points.length > 0) {
+      const first = this.draftPolygonCurrent.points[0];
+      const fx = ix + first.nx * iw;
+      const fy = iy + first.ny * ih;
+      ctx.beginPath();
+      ctx.strokeStyle = 'rgba(224,108,0,0.5)';
+      ctx.lineWidth = 1;
+      ctx.arc(fx, fy, this.CLOSE_TOL_PX, 0, Math.PI * 2);
+      ctx.stroke();
+    }
+
+    ctx.restore();
+  }
+
+  private getColors(sevClass: 'tag-red' | 'tag-orange' | 'tag-cyan' | 'draft'): { main: string; fill: string } {
+    if (sevClass === 'draft') return { main: '#E06C00', fill: 'rgba(224,108,0,0.12)' };
+    if (sevClass === 'tag-red') return { main: '#FF453A', fill: 'rgba(255,69,58,0.2)' };
+    if (sevClass === 'tag-orange') return { main: '#FFD60A', fill: 'rgba(255,214,10,0.2)' };
+    return { main: '#00C7BE', fill: 'rgba(0,199,190,0.15)' };
+  }
+
+  // ---------------- Events wiring ----------------
 
   private setupDrawingInteraction(): void {
     const canvas = this.drawCanvas.nativeElement;
@@ -585,7 +969,6 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
     const tool = this.currentTool();
 
     if (tool === 'pan') {
-      // allow panning only if renderRect exists
       if (this.imageRenderRect.w === 0) this.drawBaseImage();
 
       const p = this.pointerToCanvasPosition(e);
@@ -594,7 +977,6 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
       const off = this.panOffset();
       this.panStartOffset = { x: off.x, y: off.y };
       this.drawCanvas.nativeElement.setPointerCapture?.(e.pointerId);
-      // cursor will update via binding, and we redraw to be safe
       this.drawBaseImage();
       this.drawAnnotationsOnly();
       return;
@@ -624,10 +1006,7 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
 
         if (dist <= this.CLOSE_TOL_PX) {
           const meta = this.snapshotMeta('polygon');
-          const geometry: Geometry = {
-            type: 'polygon',
-            data: { points: this.draftPolygonCurrent.points.slice(), closed: true },
-          };
+          const geometry: Geometry = { type: 'polygon', data: { points: this.draftPolygonCurrent.points.slice(), closed: true } };
           this.pushHistory();
           this.draftShapes.push({ id: this.createDraftId('poly'), meta, geometry });
           this.draftPolygonCurrent = { points: [], closed: false };
@@ -637,12 +1016,13 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
         }
       }
 
-      this.pushHistory();
+      this.pushHistory(); // undo point-by-point
       this.draftPolygonCurrent.points.push(point);
       this.drawAnnotationsOnly();
       return;
     }
 
+    // freehand: atomic undo => pushHistory only at START (not during move)
     this.pushHistory();
     this.draftFreehandCurrent = { points: [point], drawing: true };
     this.drawAnnotationsOnly();
@@ -688,9 +1068,9 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
 
     if (this.currentTool() === 'pan' && this.isPanning) {
       this.isPanning = false;
-      // redraw with clamped offset (drawBaseImage clamps)
       this.drawBaseImage();
       this.drawAnnotationsOnly();
+      this.persistState(); // persist view on pan end
       return;
     }
 
@@ -717,276 +1097,36 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
       const loop = this.tryBuildPolygonFromFreehand(pts);
 
       if (loop) {
-        // Convertir en POLYGON rempli (zone interne)
         const meta = this.snapshotMeta('polygon');
         meta.shape = '〰️ Lasso';
 
-        // On enlève éventuellement le dernier doublon si tu préfères; ici on le garde, closed:true suffit aussi.
-        const geometry: Geometry = {
-          type: 'polygon',
-          data: { points: loop, closed: true },
-        };
-
+        const geometry: Geometry = { type: 'polygon', data: { points: loop, closed: true } };
         this.draftShapes.push({ id: this.createDraftId('lasso'), meta, geometry });
-        // reset après validation
+
         this.draftFreehandCurrent = { points: [], drawing: false };
         this.drawAnnotationsOnly();
         return;
       }
 
-      // Pas fermé -> on ne valide pas une annotation de zone
-      // (option future: conserver les points entre strokes; pour l’instant on reset)
       this.draftFreehandCurrent = { points: [], drawing: false };
       this.drawAnnotationsOnly();
     }
   }
+
+  // ---------------- Geometry helpers ----------------
 
   private snapshotMeta(kind: Geometry['type']): AnnotationMeta {
     const sev = this.selectedSeverity();
     const scls: AnnotationMeta['scls'] = sev === 'Critique' ? 'tag-red' : sev === 'Majeur' ? 'tag-orange' : 'tag-cyan';
     const shape = kind === 'bbox' ? '🟥 BBox' : kind === 'polygon' ? '🔷 Polygon' : '〰️ Tracé libre';
 
-    return {
-      def: this.annotationType(),
-      sev,
-      scls,
-      desc: this.annotationDesc(),
-      shape,
-    };
+    return { def: this.annotationType(), sev, scls, desc: this.annotationDesc(), shape };
   }
 
-  private drawAnnotationsOnly(): void {
-    const drawCanvas = this.drawCanvas.nativeElement;
-    const ctx = drawCanvas.getContext('2d');
-    if (!ctx) return;
-
-    ctx.clearRect(0, 0, drawCanvas.width, drawCanvas.height);
-    if (this.imageRenderRect.w === 0) return;
-
-    for (const ann of this.imageAnnotations()) {
-      this.drawGeometry(ctx, ann.geometry, ann.id, ann.scls, ann.def, false);
-    }
-
-    for (const draft of this.draftShapes) {
-      this.drawGeometry(ctx, draft.geometry, -1, 'draft', draft.meta.def, true);
-    }
-
-    if (this.draftRectCurrent?.dragging) {
-      const bbox = this.rectToBbox(this.draftRectCurrent.start, this.draftRectCurrent.end);
-      if (bbox) this.drawGeometry(ctx, { type: 'bbox', data: bbox }, -2, 'draft', 'Draft', true);
-    }
-
-    if (this.draftPolygonCurrent.points.length > 0) {
-      this.drawDraftPolygonOverlay(ctx);
-    }
-
-    if (this.draftFreehandCurrent.drawing && this.draftFreehandCurrent.points.length > 1) {
-      const geometry: Geometry = {
-        type: 'freehand',
-        data: { points: this.draftFreehandCurrent.points, closed: false },
-      };
-      this.drawGeometry(ctx, geometry, -3, 'draft', 'Draft', true);
-    }
-  }
-
-  private drawGeometry(
-    ctx: CanvasRenderingContext2D,
-    geometry: Geometry,
-    annId: number,
-    sevClass: 'tag-red' | 'tag-orange' | 'tag-cyan' | 'draft',
-    label: string,
-    isDraft: boolean,
-  ): void {
-    const hovered = !isDraft && this.hoveredAnnotId() === annId;
-    const colors = this.getColors(sevClass);
-
-    ctx.save();
-    ctx.lineJoin = 'round';
-    ctx.lineCap = 'round';
-    ctx.lineWidth = hovered ? 3 : 2;
-    ctx.strokeStyle = colors.main;
-    ctx.fillStyle = colors.fill;
-
-    if (hovered) {
-      ctx.shadowColor = colors.main;
-      ctx.shadowBlur = 10;
-    }
-
-    const ix = this.imageRenderRect.x;
-    const iy = this.imageRenderRect.y;
-    const iw = this.imageRenderRect.w;
-    const ih = this.imageRenderRect.h;
-
-    if (geometry.type === 'bbox') {
-      const data = geometry.data;
-      const rx = ix + data.nx * iw;
-      const ry = iy + data.ny * ih;
-      const rw = data.nw * iw;
-      const rh = data.nh * ih;
-
-      ctx.fillRect(rx, ry, rw, rh);
-      ctx.strokeRect(rx, ry, rw, rh);
-
-      if (!isDraft) {
-        ctx.shadowBlur = 0;
-        ctx.font = 'bold 10px Inter, sans-serif';
-        const tw = ctx.measureText(label).width + 8;
-        ctx.fillStyle = colors.main;
-        ctx.fillRect(rx, ry - 16, tw, 16);
-        ctx.fillStyle = '#121316';
-        ctx.fillText(label, rx + 4, ry - 4);
-      }
-
-      ctx.restore();
-      return;
-    }
-
-    const points = geometry.data.points;
-    if (points.length < 2) {
-      ctx.restore();
-      return;
-    }
-
-    ctx.beginPath();
-    points.forEach((pt, index) => {
-      const px = ix + pt.nx * iw;
-      const py = iy + pt.ny * ih;
-      if (index === 0) ctx.moveTo(px, py);
-      else ctx.lineTo(px, py);
-    });
-
-    if (geometry.type === 'polygon') {
-      ctx.closePath();
-      ctx.fill();
-    }
-
-    ctx.stroke();
-    ctx.restore();
-  }
-
-  private drawDraftPolygonOverlay(ctx: CanvasRenderingContext2D): void {
-    const ix = this.imageRenderRect.x;
-    const iy = this.imageRenderRect.y;
-    const iw = this.imageRenderRect.w;
-    const ih = this.imageRenderRect.h;
-
-    ctx.save();
-    ctx.lineJoin = 'round';
-    ctx.lineCap = 'round';
-    ctx.lineWidth = 2;
-    ctx.strokeStyle = '#E06C00';
-    ctx.fillStyle = 'rgba(224,108,0,0.12)';
-
-    ctx.beginPath();
-    this.draftPolygonCurrent.points.forEach((pt, index) => {
-      const px = ix + pt.nx * iw;
-      const py = iy + pt.ny * ih;
-      if (index === 0) ctx.moveTo(px, py);
-      else ctx.lineTo(px, py);
-    });
-
-    if (this.polygonPreview) {
-      const px = ix + this.polygonPreview.nx * iw;
-      const py = iy + this.polygonPreview.ny * ih;
-      ctx.lineTo(px, py);
-    }
-
-    ctx.stroke();
-
-    for (const pt of this.draftPolygonCurrent.points) {
-      const px = ix + pt.nx * iw;
-      const py = iy + pt.ny * ih;
-      ctx.beginPath();
-      ctx.arc(px, py, 4, 0, Math.PI * 2);
-      ctx.fillStyle = '#FFFFFF';
-      ctx.fill();
-      ctx.strokeStyle = '#E06C00';
-      ctx.lineWidth = 1;
-      ctx.stroke();
-    }
-
-    if (this.draftPolygonCurrent.points.length > 0) {
-      const first = this.draftPolygonCurrent.points[0];
-      const fx = ix + first.nx * iw;
-      const fy = iy + first.ny * ih;
-      ctx.beginPath();
-      ctx.strokeStyle = 'rgba(224,108,0,0.5)';
-      ctx.lineWidth = 1;
-      ctx.arc(fx, fy, this.CLOSE_TOL_PX, 0, Math.PI * 2);
-      ctx.stroke();
-    }
-
-    ctx.restore();
-  }
-
-  private getColors(sevClass: 'tag-red' | 'tag-orange' | 'tag-cyan' | 'draft'): { main: string; fill: string } {
-    if (sevClass === 'draft') return { main: '#E06C00', fill: 'rgba(224,108,0,0.12)' };
-    if (sevClass === 'tag-red') return { main: '#FF453A', fill: 'rgba(255,69,58,0.2)' };
-    if (sevClass === 'tag-orange') return { main: '#FFD60A', fill: 'rgba(255,214,10,0.2)' };
-    return { main: '#00C7BE', fill: 'rgba(0,199,190,0.15)' };
-  }
-
-  private tryBuildPolygonFromFreehand(points: NormPoint[]): NormPoint[] | null {
-    if (points.length < 3) return null;
-
-    // A) fermeture par proximité first/last (tolérance en px)
-    const firstPx = this.normToPixel(points[0]);
-    const lastPx = this.normToPixel(points[points.length - 1]);
-    const d = Math.hypot(lastPx.x - firstPx.x, lastPx.y - firstPx.y);
-    if (d <= this.CLOSE_TOL_PX) {
-      return [...points, points[0]];
-    }
-
-    // B) fermeture par auto-intersection (segments non adjacents)
-    // On cherche une boucle interne: intersection entre segments i..i+1 et j..j+1 (j >= i+2)
-    for (let i = 0; i < points.length - 3; i++) {
-      const p1 = points[i];
-      const p2 = points[i + 1];
-
-      for (let j = i + 2; j < points.length - 1; j++) {
-        // skip adjacency in same chain
-        if (j === i + 1) continue;
-
-        const q1 = points[j];
-        const q2 = points[j + 1];
-
-        // éviter le cas "premier et dernier segment" qui simule une fermeture extrémités (déjà géré au-dessus)
-        if (i === 0 && j === points.length - 2) continue;
-
-        const I = this.segmentIntersection(p1, p2, q1, q2);
-        if (I) {
-          // boucle = intersection + points entre i+1..j + intersection
-          const middle = points.slice(i + 1, j + 1);
-          return [I, ...middle, I];
-        }
-      }
-    }
-
-    return null;
-  }
-
-  private segmentIntersection(a1: NormPoint, a2: NormPoint, b1: NormPoint, b2: NormPoint): NormPoint | null {
-    // Intersections sur segments 2D (coordonnées normalisées)
-    const x1 = a1.nx, y1 = a1.ny;
-    const x2 = a2.nx, y2 = a2.ny;
-    const x3 = b1.nx, y3 = b1.ny;
-    const x4 = b2.nx, y4 = b2.ny;
-
-    const den = (x1 - x2) * (y3 - y4) - (y1 - y2) * (x3 - x4);
-    if (Math.abs(den) < 1e-10) return null; // parallèle / colinéaire
-
-    const t = ((x1 - x3) * (y3 - y4) - (y1 - y3) * (x3 - x4)) / den;
-    const u = ((x1 - x3) * (y1 - y2) - (y1 - y3) * (x1 - x2)) / den;
-
-    // intersection strictement à l'intérieur des segments (évite les faux positifs sur extrémités)
-    const eps = 1e-6;
-    if (t <= eps || t >= 1 - eps || u <= eps || u >= 1 - eps) return null;
-
-    const ix = x1 + t * (x2 - x1);
-    const iy = y1 + t * (y2 - y1);
-
-    // clamp sécurité
-    return { nx: Math.min(1, Math.max(0, ix)), ny: Math.min(1, Math.max(0, iy)) };
+  private createDraftId(prefix: string): string {
+    const id = `${prefix}_${this.nextDraftId}`;
+    this.nextDraftId += 1;
+    return id;
   }
 
   private rectToBbox(start: NormPoint, end: NormPoint): BBox | null {
@@ -1015,22 +1155,76 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
 
   private pointerToCanvasPosition(e: PointerEvent | WheelEvent): { x: number; y: number } {
     const rect = this.drawCanvas.nativeElement.getBoundingClientRect();
+    return { x: e.clientX - rect.left, y: e.clientY - rect.top };
+  }
+
+  private normToPixel(p: NormPoint): { x: number; y: number } {
     return {
-      x: e.clientX - rect.left,
-      y: e.clientY - rect.top,
+      x: this.imageRenderRect.x + p.nx * this.imageRenderRect.w,
+      y: this.imageRenderRect.y + p.ny * this.imageRenderRect.h,
     };
   }
 
-  private normToPixel(point: NormPoint): { x: number; y: number } {
-    return {
-      x: this.imageRenderRect.x + point.nx * this.imageRenderRect.w,
-      y: this.imageRenderRect.y + point.ny * this.imageRenderRect.h,
-    };
+  private fileTypeLabel(mime: string): string {
+    const short = (mime || '').replace('image/', '').toUpperCase();
+    return short || 'IMG';
   }
 
-  private createDraftId(prefix: string): string {
-    const id = `${prefix}_${this.nextDraftId}`;
-    this.nextDraftId += 1;
-    return id;
+  private formatBytes(bytes: number): string {
+    const kb = 1024;
+    const mb = kb * 1024;
+    if (bytes >= mb) return `${(bytes / mb).toFixed(1)} MB`;
+    if (bytes >= kb) return `${(bytes / kb).toFixed(1)} KB`;
+    return `${bytes} B`;
+  }
+
+  // lasso closure
+  private tryBuildPolygonFromFreehand(points: NormPoint[]): NormPoint[] | null {
+    if (points.length < 3) return null;
+
+    const firstPx = this.normToPixel(points[0]);
+    const lastPx = this.normToPixel(points[points.length - 1]);
+    const d = Math.hypot(lastPx.x - firstPx.x, lastPx.y - firstPx.y);
+    if (d <= this.CLOSE_TOL_PX) return [...points, points[0]];
+
+    for (let i = 0; i < points.length - 3; i++) {
+      const p1 = points[i];
+      const p2 = points[i + 1];
+
+      for (let j = i + 2; j < points.length - 1; j++) {
+        if (i === 0 && j === points.length - 2) continue;
+
+        const q1 = points[j];
+        const q2 = points[j + 1];
+
+        const I = this.segmentIntersection(p1, p2, q1, q2);
+        if (I) {
+          const middle = points.slice(i + 1, j + 1);
+          return [I, ...middle, I];
+        }
+      }
+    }
+
+    return null;
+  }
+
+  private segmentIntersection(a1: NormPoint, a2: NormPoint, b1: NormPoint, b2: NormPoint): NormPoint | null {
+    const x1 = a1.nx, y1 = a1.ny;
+    const x2 = a2.nx, y2 = a2.ny;
+    const x3 = b1.nx, y3 = b1.ny;
+    const x4 = b2.nx, y4 = b2.ny;
+
+    const den = (x1 - x2) * (y3 - y4) - (y1 - y2) * (x3 - x4);
+    if (Math.abs(den) < 1e-10) return null;
+
+    const t = ((x1 - x3) * (y3 - y4) - (y1 - y3) * (x3 - x4)) / den;
+    const u = ((x1 - x3) * (y1 - y2) - (y1 - y3) * (x1 - x2)) / den;
+
+    const eps = 1e-6;
+    if (t <= eps || t >= 1 - eps || u <= eps || u >= 1 - eps) return null;
+
+    const ix = x1 + t * (x2 - x1);
+    const iy = y1 + t * (y2 - y1);
+    return { nx: Math.min(1, Math.max(0, ix)), ny: Math.min(1, Math.max(0, iy)) };
   }
 }
