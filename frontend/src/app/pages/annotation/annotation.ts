@@ -149,6 +149,47 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
   private onPointerDownRef?: (e: PointerEvent) => void;
   private onPointerMoveRef?: (e: PointerEvent) => void;
   private onPointerUpRef?: (e: PointerEvent) => void;
+  private undoStack: any[] = [];
+  private redoStack: any[] = [];
+  private onWheelZoom = (e: WheelEvent): void => {
+    if (this.imageRenderRect.w === 0) return;
+
+    e.preventDefault();
+
+    const delta = -e.deltaY;
+    const current = this.zoom();
+
+    const factor = delta > 0 ? 1.1 : 0.9;
+    let next = current * factor;
+    next = Math.round(Math.max(20, Math.min(1200, next)));
+
+    if (next === current) return;
+
+    const canvasPos = this.pointerToCanvasPosition(e);
+
+    const ix = this.imageRenderRect.x;
+    const iy = this.imageRenderRect.y;
+    const iw = this.imageRenderRect.w;
+    const ih = this.imageRenderRect.h;
+
+    const nx = (canvasPos.x - ix) / iw;
+    const ny = (canvasPos.y - iy) / ih;
+
+    this.zoom.set(next);
+
+    // Recompute image with new zoom
+    this.drawBaseImage();
+
+    // Adjust panOffset so that cursor stays on same image point
+    const targetX = canvasPos.x - nx * this.imageRenderRect.w;
+    const targetY = canvasPos.y - ny * this.imageRenderRect.h;
+
+    const pan = this.panOffset();
+    this.panOffset.set({ x: pan.x + (targetX - this.imageRenderRect.x), y: pan.y + (targetY - this.imageRenderRect.y) });
+
+    this.drawBaseImage();
+    this.drawAnnotationsOnly();
+  };
 
   ngAfterViewInit(): void {
     setTimeout(() => {
@@ -166,6 +207,7 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
     if (this.onPointerDownRef) canvas.removeEventListener('pointerdown', this.onPointerDownRef);
     if (this.onPointerMoveRef) canvas.removeEventListener('pointermove', this.onPointerMoveRef);
     if (this.onPointerUpRef) canvas.removeEventListener('pointerup', this.onPointerUpRef);
+    canvas.removeEventListener('wheel', this.onWheelZoom);
   }
 
   setTool(tool: Tool): void {
@@ -176,6 +218,30 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
 
   setSeverity(severity: SeverityUi): void {
     this.selectedSeverity.set(severity);
+  }
+
+  @HostListener('window:keydown', ['$event'])
+  onKeyDown(e: KeyboardEvent): void {
+    const key = e.key.toLowerCase();
+
+    // Undo (Ctrl+Z or Cmd+Z)
+    if ((e.ctrlKey || e.metaKey) && !e.shiftKey && key === 'z') {
+      e.preventDefault();
+      e.stopPropagation();
+      this.undo();
+      return;
+    }
+
+    // Redo (Ctrl+Y OR Ctrl+Shift+Z)
+    if (
+      (e.ctrlKey || e.metaKey) &&
+      (key === 'y' || (key === 'z' && e.shiftKey))
+    ) {
+      e.preventDefault();
+      e.stopPropagation();
+      this.redo();
+      return;
+    }
   }
 
   hoverAnnotation(id: number, isEnter: boolean): void {
@@ -190,6 +256,7 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
   }
 
   resetDrafts(): void {
+    this.pushHistory();
     this.draftShapes = [];
     this.draftRectCurrent = null;
     this.draftPolygonCurrent = { points: [], closed: false };
@@ -246,9 +313,15 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
   updateZoom(event: Event): void {
     const input = event.target as HTMLInputElement;
     const value = Number(input.value);
-    const next = Number.isFinite(value) ? value : 100;
+    let next = Number.isFinite(value) ? value : 100;
+
+    next = Math.round(Math.max(20, Math.min(1200, next)));
+
     this.zoom.set(next);
-    // re-render immediately (image + overlay)
+
+    // auto switch to pan tool
+    this.currentTool.set('pan');
+
     this.drawBaseImage();
     this.drawAnnotationsOnly();
   }
@@ -257,6 +330,47 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
     this.zoom.set(100);
     this.drawBaseImage();
     this.drawAnnotationsOnly();
+  }
+
+  private snapshotState(): any {
+    return {
+      draftShapes: JSON.parse(JSON.stringify(this.draftShapes)),
+      draftPolygonCurrent: JSON.parse(JSON.stringify(this.draftPolygonCurrent)),
+      draftFreehandCurrent: JSON.parse(JSON.stringify(this.draftFreehandCurrent)),
+    };
+  }
+
+  private restoreState(state: any): void {
+    this.draftShapes = state.draftShapes;
+    this.draftPolygonCurrent = state.draftPolygonCurrent;
+    this.draftFreehandCurrent = state.draftFreehandCurrent;
+
+    this.drawAnnotationsOnly();
+  }
+
+  private pushHistory(): void {
+    this.undoStack.push(this.snapshotState());
+    this.redoStack = [];
+  }
+
+  undo(): void {
+    if (this.undoStack.length === 0) return;
+
+    const current = this.snapshotState();
+    this.redoStack.push(current);
+
+    const prev = this.undoStack.pop();
+    this.restoreState(prev);
+  }
+
+  redo(): void {
+    if (this.redoStack.length === 0) return;
+
+    const current = this.snapshotState();
+    this.undoStack.push(current);
+
+    const next = this.redoStack.pop();
+    this.restoreState(next);
   }
 
   currentToolLabel(): string {
@@ -455,6 +569,7 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
     if (this.onPointerDownRef) canvas.removeEventListener('pointerdown', this.onPointerDownRef);
     if (this.onPointerMoveRef) canvas.removeEventListener('pointermove', this.onPointerMoveRef);
     if (this.onPointerUpRef) canvas.removeEventListener('pointerup', this.onPointerUpRef);
+    canvas.removeEventListener('wheel', this.onWheelZoom);
 
     this.onPointerDownRef = (e: PointerEvent) => this.onPointerDown(e);
     this.onPointerMoveRef = (e: PointerEvent) => this.onPointerMove(e);
@@ -463,6 +578,7 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
     canvas.addEventListener('pointerdown', this.onPointerDownRef);
     canvas.addEventListener('pointermove', this.onPointerMoveRef);
     canvas.addEventListener('pointerup', this.onPointerUpRef);
+    canvas.addEventListener('wheel', this.onWheelZoom, { passive: false });
   }
 
   private onPointerDown(e: PointerEvent): void {
@@ -512,6 +628,7 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
             type: 'polygon',
             data: { points: this.draftPolygonCurrent.points.slice(), closed: true },
           };
+          this.pushHistory();
           this.draftShapes.push({ id: this.createDraftId('poly'), meta, geometry });
           this.draftPolygonCurrent = { points: [], closed: false };
           this.polygonPreview = null;
@@ -520,11 +637,13 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
         }
       }
 
+      this.pushHistory();
       this.draftPolygonCurrent.points.push(point);
       this.drawAnnotationsOnly();
       return;
     }
 
+    this.pushHistory();
     this.draftFreehandCurrent = { points: [point], drawing: true };
     this.drawAnnotationsOnly();
   }
@@ -581,6 +700,7 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
       this.draftRectCurrent.dragging = false;
       const bbox = this.rectToBbox(this.draftRectCurrent.start, this.draftRectCurrent.end);
       if (bbox) {
+        this.pushHistory();
         const meta = this.snapshotMeta('bbox');
         const geometry: Geometry = { type: 'bbox', data: bbox };
         this.draftShapes.push({ id: this.createDraftId('bbox'), meta, geometry });
@@ -893,7 +1013,7 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
     return { nx: (x - ix) / iw, ny: (y - iy) / ih };
   }
 
-  private pointerToCanvasPosition(e: PointerEvent): { x: number; y: number } {
+  private pointerToCanvasPosition(e: PointerEvent | WheelEvent): { x: number; y: number } {
     const rect = this.drawCanvas.nativeElement.getBoundingClientRect();
     return {
       x: e.clientX - rect.left,

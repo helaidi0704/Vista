@@ -98,7 +98,15 @@
 
           <div style="width:1px;height:20px;background:var(--border);margin:0 4px;"></div>
           <span style="font-size:11px;color:var(--text-muted);">Zoom: {{ zoom() }}%</span>
-          <input type="range" min="50" max="300" [value]="zoom()" step="10" style="width:80px;accent-color:var(--accent);" (input)="updateZoom($event)" />
+          <input
+            type="range"
+            min="20"
+            max="1200"
+            step="5"
+            [value]="zoom()"
+            (input)="updateZoom($event)"
+            style="width:80px;accent-color:var(--accent);"
+          />
 
           <button class="btn btn-sm btn-secondary" type="button" (click)="resetDrafts()">Reset</button>
         </div>
@@ -108,6 +116,7 @@
       <div class="viz-placeholder"
            style="flex:1;min-height:380px;position:relative;overflow:hidden;background:#0D0E1A;"
            [style.cursor]="cursorStyle()"
+           tabindex="0"
            id="image-container">
         <canvas #imageCanvas style="position:absolute;top:0;left:0;"></canvas>
         <canvas #drawCanvas style="position:absolute;top:0;left:0;"></canvas>
