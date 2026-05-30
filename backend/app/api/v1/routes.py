@@ -2,7 +2,7 @@
 VISTA — API v1 Routes
 All endpoints matching the sequence diagrams.
 """
-from fastapi import APIRouter, Depends, UploadFile, File, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import Request,  APIRouter, Depends, UploadFile, File, HTTPException, WebSocket, WebSocketDisconnect
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
 from uuid import UUID
@@ -3653,3 +3653,122 @@ async def prometheus_metrics(
 
     output = "# VISTA Prometheus Metrics\n" + "\n".join(metrics) + "\n"
     return PlainTextResponse(output, media_type="text/plain")
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# PIPELINE MANAGEMENT — Save & Load pipeline configurations
+# ═══════════════════════════════════════════════════════════════════════════════
+
+@router.post("/pipelines")
+async def save_pipeline(
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    user=Depends(get_current_user),
+):
+    """
+    Save a pipeline configuration (blocks, connections, hyperparams).
+    Quality engineers can create and reuse pipeline templates.
+    """
+    from sqlalchemy import text
+    import json as jsonlib
+
+    await db.execute(text("""
+        CREATE TABLE IF NOT EXISTS pipelines (
+            id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+            name VARCHAR(255) NOT NULL,
+            description TEXT DEFAULT '',
+            blocks JSONB DEFAULT '[]',
+            connections JSONB DEFAULT '[]',
+            hyperparams JSONB DEFAULT '{}',
+            user_id UUID,
+            organization_id UUID,
+            is_template BOOLEAN DEFAULT false,
+            created_at TIMESTAMPTZ DEFAULT NOW(),
+            updated_at TIMESTAMPTZ DEFAULT NOW()
+        )
+    """))
+
+    body = await request.json()
+    name = body.get("name", "Unnamed Pipeline")
+    description = body.get("description", "")
+    blocks = body.get("blocks", [])
+    connections = body.get("connections", [])
+    hyperparams = body.get("hyperparams", {})
+
+    pipeline_id = str(__import__("uuid").uuid4())
+    org_id = user.get("organization_id") if user else None
+    user_id = user.get("id") if user else None
+
+    await db.execute(text("""
+        INSERT INTO pipelines (id, name, description, blocks, connections, hyperparams, user_id, organization_id)
+        VALUES (:id, :name, :desc, :blocks, :connections, :hp, :uid, :org)
+    """), {
+        "id": pipeline_id, "name": name, "desc": description,
+        "blocks": jsonlib.dumps(blocks), "connections": jsonlib.dumps(connections),
+        "hp": jsonlib.dumps(hyperparams), "uid": user_id, "org": org_id,
+    })
+
+    return {
+        "id": pipeline_id,
+        "name": name,
+        "blocks_count": len(blocks),
+        "connections_count": len(connections),
+        "message": f"Pipeline '{name}' saved successfully",
+    }
+
+
+@router.get("/pipelines")
+async def list_pipelines(
+    db: AsyncSession = Depends(get_db),
+    user=Depends(get_current_user),
+):
+    """List saved pipelines for the current user's organization."""
+    from sqlalchemy import text
+    try:
+        org_id = user.get("organization_id") if user else None
+        if org_id:
+            result = await db.execute(text(
+                "SELECT id, name, description, blocks, connections, hyperparams, user_id, created_at "
+                "FROM pipelines WHERE organization_id = :org ORDER BY created_at DESC"
+            ), {"org": str(org_id)})
+        else:
+            result = await db.execute(text(
+                "SELECT id, name, description, blocks, connections, hyperparams, user_id, created_at "
+                "FROM pipelines ORDER BY created_at DESC"
+            ))
+        rows = result.mappings().fetchall()
+        user_email = user.get("email", "") if user else ""
+        user_id = user.get("id", "") if user else ""
+        return [{**dict(r), "is_mine": str(r.get("user_id","")) == str(user_id)} for r in rows]
+    except Exception:
+        return []
+
+
+@router.get("/pipelines/{pipeline_id}")
+async def get_pipeline(
+    pipeline_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    user=Depends(get_current_user),
+):
+    """Load a specific pipeline configuration."""
+    from sqlalchemy import text
+    result = await db.execute(text(
+        "SELECT id, name, description, blocks, connections, hyperparams, created_at "
+        "FROM pipelines WHERE id = :id"
+    ), {"id": str(pipeline_id)})
+    pipeline = result.mappings().fetchone()
+    if not pipeline:
+        raise HTTPException(404, "Pipeline not found")
+    return dict(pipeline)
+
+
+@router.delete("/pipelines/{pipeline_id}")
+async def delete_pipeline(
+    pipeline_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    user=Depends(get_current_user),
+):
+    """Delete a saved pipeline."""
+    from sqlalchemy import text
+    await db.execute(text("DELETE FROM pipelines WHERE id = :id"), {"id": str(pipeline_id)})
+    return {"message": "Pipeline deleted"}

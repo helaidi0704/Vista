@@ -47,6 +47,9 @@ export default function TrainingPage(){
   const [jobs,setJobs]=useState<TJob[]>([]);
   const [models,setModels]=useState<MModel[]>([]);
   const [nodes,setNodes]=useState<PNode[]>([]);
+  const [savedPipelines,setSavedPipelines]=useState<any[]>([]);
+  const [pipelineName,setPipelineName]=useState("");
+  const [showLoadMenu,setShowLoadMenu]=useState(false);
   const [edges,setEdges]=useState<PEdge[]>([]);
   const [selN,setSelN]=useState<string|null>(null);
   const [conn,setConn]=useState<string|null>(null);
@@ -56,6 +59,7 @@ export default function TrainingPage(){
   const pollRef=useRef<ReturnType<typeof setInterval>|null>(null);
 
   useEffect(()=>{
+    api.get("/api/v1/pipelines").then(({data}:any)=>setSavedPipelines(data)).catch(()=>{});
     api.get("/api/v1/datasets").then(({data})=>{setDs(data);if(data.length>0)setSelDs(data[0].id);}).catch(()=>{});
     api.get("/api/v1/training-jobs").then(({data})=>setJobs(data)).catch(()=>{});
     api.get("/api/v1/models").then(({data})=>setModels(data)).catch(()=>{});
@@ -156,6 +160,35 @@ export default function TrainingPage(){
   const sn=nodes.find(n=>n.id===selN);
   const hasModel=nodes.some(n=>n.type==="model");
 
+  async function savePipeline(){
+    let name=pipelineName;
+    if(!name){name=prompt("Nom du pipeline:","Pipeline_"+nodes.map(n=>n.label).join("_").slice(0,30));if(!name)return;setPipelineName(name);}
+    try{
+      const b=nodes.map(n=>({id:n.id,type:n.type,label:n.label,icon:n.icon,color:n.color,x:n.x,y:n.y,config:n.config,hasIn:n.hasIn,hasOut:n.hasOut}));
+      const c=edges.map(e=>({id:e.id,from:e.from,to:e.to}));
+      const existing=savedPipelines.find((p:any)=>p.name===name);
+      if(existing){await api.delete("/api/v1/pipelines/"+existing.id);}
+      await api.post("/api/v1/pipelines",{name:name,description:nodes.map(n=>n.label).join(" > "),blocks:b,connections:c,hyperparams:{epochs:epochs,batch_size:bs,lr:lr,optimizer:opt}});
+      api.get("/api/v1/pipelines").then(({data}:any)=>setSavedPipelines(data)).catch(()=>{});
+    }catch(e){console.error(e);}
+  }
+  function loadPipeline(p:any){
+    try{
+      const b=typeof p.blocks==="string"?JSON.parse(p.blocks):p.blocks;
+      const c=typeof p.connections==="string"?JSON.parse(p.connections):p.connections;
+      const hp=typeof p.hyperparams==="string"?JSON.parse(p.hyperparams):p.hyperparams;
+      if(Array.isArray(b))setNodes(b);
+      if(Array.isArray(c))setEdges(c);
+      if(hp&&hp.epochs)setEpochs(hp.epochs);
+      if(hp&&hp.batch_size)setBs(hp.batch_size);
+      if(hp&&hp.lr)setLr(String(hp.lr));
+      if(hp&&hp.optimizer)setOpt(hp.optimizer);
+      setPipelineName(p.name);setShowLoadMenu(false);
+    }catch(e){console.error(e);}
+  }
+  async function deletePipeline(id:string){
+    try{await api.delete("/api/v1/pipelines/"+id);setSavedPipelines(savedPipelines.filter((p:any)=>p.id!==id));}catch(e){console.error(e);}
+  }
   return(
     <div className="fade-in" style={{display:"flex",gap:16,height:"calc(100vh - 120px)"}}>
       {/* Left palette */}
@@ -191,11 +224,15 @@ export default function TrainingPage(){
 
       {/* Center: Canvas + Launch + History */}
       <div style={{flex:1,display:"flex",flexDirection:"column",gap:12,minWidth:0}}>
-        <div className="card" style={{flex:1,position:"relative",overflow:"hidden",padding:0}}>
+        <div className="card" style={{height:320,position:"relative",overflow:"hidden",padding:0,flexShrink:0}}>
           <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"10px 16px",borderBottom:"1px solid var(--border)"}}>
             <span className="card-title" style={{fontSize:13}}>Pipeline \u2014 Glisser-deposer les blocs</span>
             <div style={{display:"flex",gap:6}}>
               <button className="btn btn-sm btn-secondary" onClick={()=>{setNodes([]);setEdges([]);setSelN(null);}}>Effacer</button>
+              <button className="btn btn-sm btn-primary" style={{background:"var(--green)",borderColor:"var(--green)"}} onClick={()=>{setNodes([]);setEdges([]);setSelN(null);setPipelineName("");}}>+ Nouveau</button>
+              <input value={pipelineName} onChange={(e:any)=>setPipelineName(e.target.value)} placeholder="Nom" style={{width:100,padding:"4px 8px",fontSize:11,background:"var(--bg-input)",border:"1px solid var(--border)",borderRadius:6,color:"var(--text)"}} />
+              <button className="btn btn-sm btn-primary" onClick={savePipeline} disabled={nodes.length===0}>Sauvegarder</button>
+              <button className="btn btn-sm btn-secondary" onClick={()=>setShowLoadMenu(!showLoadMenu)}>Charger ({savedPipelines.length})</button>
               <span style={{fontSize:11,color:"var(--text3)",padding:"4px 8px"}}>{nodes.length} blocs, {edges.length} liens</span>
             </div>
           </div>
@@ -275,6 +312,20 @@ export default function TrainingPage(){
 
         {/* Launch bar */}
         <div className="card" style={{padding:14}}>
+          {showLoadMenu && savedPipelines.length>0 && (
+            <div className="card" style={{padding:8,marginBottom:8}}>
+              <div style={{fontSize:11,fontWeight:700,color:"var(--accent)",marginBottom:6}}>Pipelines enregistres</div>
+              {savedPipelines.map((p:any)=>(
+                <div key={p.id} style={{display:"flex",alignItems:"center",gap:6,padding:"6px 8px",borderRadius:6,cursor:"pointer",fontSize:12,borderLeft:"3px solid var(--accent)",marginBottom:4,background:"var(--bg3)"}}>
+                  <div style={{flex:1}} onClick={()=>loadPipeline(p)}>
+                    <div style={{fontWeight:600}}>{p.name}</div>
+                    <div style={{fontSize:10,color:"var(--text3)"}}>{p.description}</div>
+                  </div>
+                  <button onClick={()=>deletePipeline(p.id)} style={{color:"var(--red)",background:"none",border:"none",cursor:"pointer",padding:2}}>x</button>
+                </div>
+              ))}
+            </div>
+          )}
           <div style={{display:"flex",alignItems:"center",gap:10,flexWrap:"wrap"}}>
             <div style={{display:"flex",alignItems:"center",gap:4}}><label className="form-label">Epochs:</label>
               <input type="number" className="form-input" value={epochs} onChange={e=>setEpochs(Number(e.target.value))} style={{width:60,fontSize:12}}/></div>
@@ -304,13 +355,13 @@ export default function TrainingPage(){
         </div>
 
         {/* History */}
-        <div className="card" style={{maxHeight:140,overflowY:"auto",padding:"10px 14px"}}>
+        <div className="card" style={{maxHeight:280,overflowY:"auto",padding:"10px 14px"}}>
           <div className="card-header" style={{marginBottom:6}}><span className="card-title" style={{fontSize:12}}>Historique</span></div>
           <table style={{width:"100%",borderCollapse:"collapse",fontSize:11}}>
             <thead><tr style={{color:"var(--text3)"}}>
               {["Nom","Arch","Epochs","mAP","Status"].map(h=><th key={h} style={{textAlign:"left",padding:"4px 8px",borderBottom:"1px solid var(--border)"}}>{h}</th>)}
             </tr></thead>
-            <tbody>{jobs.slice(0,5).map(j=>(
+            <tbody>{jobs.slice(0,20).map(j=>(
               <tr key={j.id} style={{borderBottom:"1px solid var(--border)"}}>
                 <td style={{padding:"4px 8px",fontWeight:500}}>{j.name}</td>
                 <td style={{padding:"4px 8px"}}>{j.architecture}</td>
