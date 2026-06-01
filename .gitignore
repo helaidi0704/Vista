@@ -1,0 +1,4 @@
+.env
+infra/.env
+*_bcp*
+*_bkp*
