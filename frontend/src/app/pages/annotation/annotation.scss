@@ -24,3 +24,78 @@
   color: var(--text-primary);
   border-color: var(--orange);
 }
+
+.vista-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: rgba(3, 5, 12, 0.72);
+  backdrop-filter: blur(8px);
+}
+
+.vista-modal-card {
+  width: min(440px, 100%);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 18px;
+  padding: 20px;
+  background: linear-gradient(145deg, rgba(21, 24, 38, 0.98), rgba(13, 14, 26, 0.98));
+  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.45);
+  color: var(--text-primary);
+}
+
+.vista-modal-header {
+  display: flex;
+  gap: 14px;
+  align-items: center;
+  margin-bottom: 16px;
+}
+
+.vista-modal-logo {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 46px;
+  height: 46px;
+  flex: 0 0 auto;
+  border-radius: 14px;
+  background: rgba(0, 199, 190, 0.12);
+  color: var(--accent);
+  border: 1px solid rgba(0, 199, 190, 0.28);
+}
+
+.vista-modal-title {
+  font-size: 16px;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+}
+
+.vista-modal-subtitle {
+  margin-top: 4px;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.vista-modal-subtitle.is-success {
+  color: var(--cyan);
+}
+
+.vista-modal-subtitle.is-error {
+  color: var(--red);
+}
+
+.vista-modal-body {
+  color: var(--text-secondary);
+  font-size: 13px;
+  line-height: 1.6;
+  margin-bottom: 18px;
+}
+
+.vista-modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+}

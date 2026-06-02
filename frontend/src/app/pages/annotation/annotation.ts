@@ -11,10 +11,13 @@ import {
   signal,
 } from '@angular/core';
 import { CommonModule, isPlatformBrowser } from '@angular/common';
+import { HttpClient } from '@angular/common/http';
 import { FormsModule } from '@angular/forms';
+import { delay, firstValueFrom, Observable, of } from 'rxjs';
 
 type Tool = 'pan' | 'rect' | 'polygon' | 'freehand';
 type SeverityUi = 'Critique' | 'Majeur' | 'Mineur';
+type SavePopupKind = 'success' | 'error';
 
 interface NormPoint {
   nx: number;
@@ -74,12 +77,85 @@ interface ImageModel {
   createdAt: string;      // ISO
 }
 
-interface PersistedAnnotationStateV1 {
-  version: 1;
+interface PersistedAnnotationWorkspaceV2 {
+  version: 2;
   currentImageId: string;
   images: Record<string, ImageModel>;
   annotationsByImageId: Record<string, AnnotationItem[]>;
   viewByImageId: Record<string, { zoom: number; panOffset: { x: number; y: number } }>;
+  draftsByImageId: Record<string, PersistedDraftState>;
+  editorByImageId: Record<string, PersistedEditorState>;
+}
+
+interface PersistedDraftState {
+  draftShapes: DraftShape[];
+  draftRectCurrent: { start: NormPoint; end: NormPoint; dragging: boolean } | null;
+  draftPolygonCurrent: { points: NormPoint[]; closed: boolean };
+  polygonPreview: NormPoint | null;
+  draftFreehandCurrent: { points: NormPoint[]; drawing: boolean };
+}
+
+interface PersistedEditorState {
+  selectedSeverity: SeverityUi;
+  annotationType: string;
+  annotationDesc: string;
+}
+
+interface SaveAnnotationsRequestDto {
+  requestId: string;
+  sentAt: string;
+  image: SaveImageDto;
+  annotations: SaveAnnotationDto[];
+}
+
+interface SaveImageDto {
+  id: string;
+  name: string;
+  format: string;
+  size?: number;
+  width: number;
+  height: number;
+  createdAt: string;
+  src?: string;
+}
+
+interface SaveAnnotationDto {
+  id: number;
+  imageId: string;
+  defectLabel: string;
+  severity: SeverityUi;
+  description: string;
+  shapeLabel: string;
+  geometry: SaveGeometryDto;
+}
+
+type SaveGeometryDto =
+  | { type: 'bbox'; bbox: { nx: number; ny: number; nw: number; nh: number } }
+  | { type: 'polygon'; polygon: { points: NormPoint[]; closed: true } }
+  | { type: 'freehand'; freehand: { points: NormPoint[]; closed: false } };
+
+interface SaveAnnotationsResponseDto {
+  success: boolean;
+  requestId: string;
+  savedImageId: string;
+  savedAnnotationsCount: number;
+  backendMessage: string;
+  receivedAt: string;
+}
+
+interface SaveAnnotationsErrorDto {
+  success: false;
+  requestId: string;
+  backendMessage: string;
+  receivedAt: string;
+  errorCode?: string;
+}
+
+interface SavePopupState {
+  open: boolean;
+  kind: SavePopupKind;
+  title: string;
+  message: string;
 }
 
 interface UndoState {
@@ -104,9 +180,12 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
   @ViewChild('fileInput', { static: true }) fileInput!: ElementRef<HTMLInputElement>;
 
   private readonly platformId = inject(PLATFORM_ID);
+  private readonly http = inject(HttpClient);
   private readonly isBrowser = isPlatformBrowser(this.platformId);
 
-  private readonly STORAGE_KEY = 'vista.viewer.annotation.v1';
+  private readonly STORAGE_KEY = 'vista.viewer.annotation.workspace.v2';
+  private readonly SAVE_ENDPOINT = '/api/images/save-annotations';
+  private readonly ENABLE_REAL_BACKEND_CALL = false;
 
   private readonly DEFAULT_IMAGE_ID = 'asset_carter_moteur';
   private readonly DEFAULT_IMAGE_SRC = '/assets/carter_moteur.png';
@@ -135,6 +214,16 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
   // Current image model
   currentImage = signal<ImageModel | null>(null);
 
+  isSavingRemote = signal(false);
+  remoteSaveSuccess = signal<string | null>(null);
+  remoteSaveError = signal<string | null>(null);
+  savePopup = signal<SavePopupState>({
+    open: false,
+    kind: 'success',
+    title: '',
+    message: '',
+  });
+
   // Persisted annotations for CURRENT image only
   imageAnnotations = signal<AnnotationItem[]>([]);
   hoveredAnnotId = signal<number | null>(null);
@@ -159,6 +248,7 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
   private readonly CLOSE_TOL_PX = 14;
   private nextAnnotationId = 1;
   private nextDraftId = 1;
+  private lastDraftAutosaveAt = 0;
 
   // Pointer listeners
   private onPointerDownRef?: (e: PointerEvent) => void;
@@ -217,19 +307,19 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
     // redraw (drawBaseImage clamps panOffset)
     this.drawBaseImage();
     this.drawAnnotationsOnly();
-    this.persistState(); // persist view (wheel modifies zoom+pan)
+    this.persistWorkspaceState(); // persist view (wheel modifies zoom+pan)
   };
 
   ngAfterViewInit(): void {
     setTimeout(() => {
       this.setupDrawingInteraction();
 
-      if (this.isBrowser && this.restoreFromStorage()) {
+      if (this.isBrowser && this.restoreWorkspaceFromStorage()) {
         const img = this.currentImage();
         if (img) this.loadImageFromSrc(img.src, true);
       } else {
         this.setDefaultImageAndSeed();
-        this.persistState();
+        this.persistWorkspaceState();
         const img = this.currentImage();
         if (img) this.loadImageFromSrc(img.src, true);
       }
@@ -252,21 +342,29 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
   // ---------------- UI actions ----------------
 
   setTool(tool: Tool): void {
+    this.clearRemoteFeedback();
     this.currentTool.set(tool);
     this.polygonPreview = null;
+    this.persistWorkspaceState();
     this.drawAnnotationsOnly();
   }
 
   setSeverity(severity: SeverityUi): void {
+    this.clearRemoteFeedback();
     this.selectedSeverity.set(severity);
+    this.persistWorkspaceState();
   }
 
   updateAnnotationType(value: string): void {
+    this.clearRemoteFeedback();
     this.annotationType.set(value);
+    this.persistWorkspaceState();
   }
 
   updateAnnotationDesc(value: string): void {
+    this.clearRemoteFeedback();
     this.annotationDesc.set(value);
+    this.persistWorkspaceState();
   }
 
   updateZoom(event: Event): void {
@@ -281,14 +379,14 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
 
     this.drawBaseImage();
     this.drawAnnotationsOnly();
-    this.persistState();
+    this.persistWorkspaceState();
   }
 
   resetZoom(): void {
     this.zoom.set(100);
     this.drawBaseImage();
     this.drawAnnotationsOnly();
-    this.persistState();
+    this.persistWorkspaceState();
   }
 
   hoverAnnotation(id: number, isEnter: boolean): void {
@@ -297,9 +395,10 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
   }
 
   deleteAnnotation(id: number): void {
+    this.clearRemoteFeedback();
     this.imageAnnotations.update((annots) => annots.filter((a) => a.id !== id));
     if (this.hoveredAnnotId() === id) this.hoveredAnnotId.set(null);
-    this.persistState();
+    this.persistWorkspaceState();
     this.drawAnnotationsOnly();
   }
 
@@ -318,10 +417,6 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
       default:
         return 'crosshair';
     }
-  }
-
-  trackAnnotationById(_index: number, ann: AnnotationItem): number {
-    return ann.id;
   }
 
   openImagePicker(): void {
@@ -395,6 +490,8 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
 
     const prev = this.undoStack.pop();
     if (prev) this.restoreState(prev);
+    this.clearRemoteFeedback();
+    this.persistWorkspaceState();
   }
 
   redo(): void {
@@ -405,6 +502,8 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
 
     const next = this.redoStack.pop();
     if (next) this.restoreState(next);
+    this.clearRemoteFeedback();
+    this.persistWorkspaceState();
   }
 
   // ---------------- Draft lifecycle ----------------
@@ -439,19 +538,282 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
     if (hasAnyDraft) this.pushHistory();
 
     this.clearDraftsNoHistory();
+    this.clearRemoteFeedback();
+    this.persistWorkspaceState();
     this.drawAnnotationsOnly();
   }
 
-  saveAnnotation(): void {
-    if (this.draftShapes.length === 0) {
-      if (this.hasInProgressShape()) {
-        this.resetDrafts();
-        alert("Aucun draft finalisé à enregistrer. Le dessin en cours a été réinitialisé.");
-        return;
-      }
-      alert("Aucune forme à enregistrer. Dessine une BBox, un Polygon ou un tracé libre d'abord.");
+  async saveToBackend(): Promise<void> {
+    this.remoteSaveSuccess.set(null);
+    this.remoteSaveError.set(null);
+    this.closeSavePopup();
+
+    const img = this.currentImage();
+    if (!img) {
+      this.handleSaveFailure('Aucune image chargée.');
       return;
     }
+
+    if (this.hasInProgressShape()) {
+      this.handleSaveFailure("Une annotation est encore en cours de dessin. Finalise-la avant l'envoi en base.");
+      this.persistWorkspaceState();
+      return;
+    }
+
+    if (this.draftShapes.length > 0) {
+      this.commitDraftsToImageAnnotations();
+    }
+
+    let dto: SaveAnnotationsRequestDto;
+    try {
+      dto = this.buildSaveRequestDto();
+    } catch (error) {
+      console.error('[VISTA][SAVE][DTO]', error);
+      this.handleSaveFailure('Impossible de préparer la sauvegarde.');
+      return;
+    }
+
+    const validationErrors = this.validateSaveRequest(dto);
+    if (validationErrors.length > 0) {
+      console.error('[VISTA][SAVE][VALIDATION]', validationErrors, dto);
+      this.handleSaveFailure("L'enregistrement ne s'est pas fait.");
+      return;
+    }
+
+    this.isSavingRemote.set(true);
+
+    try {
+      const response = await firstValueFrom(
+        this.ENABLE_REAL_BACKEND_CALL
+          ? this.saveToBackendDryRun$(dto)
+          : this.saveToBackendDryRun$(dto),
+      );
+
+      if (!response.success) {
+        this.handleSaveFailure("L'enregistrement ne s'est pas fait.");
+        return;
+      }
+
+      this.remoteSaveSuccess.set(`Enregistrement préparé (${response.savedAnnotationsCount} annotation(s)).`);
+      this.openSavePopup({
+        kind: 'success',
+        title: 'Enregistrement réussi',
+        message: 'Les données ont été préparées côté frontend. Aucun appel externe réel n’a été effectué.',
+      });
+      this.persistWorkspaceState();
+    } catch (error) {
+      console.error('[VISTA][SAVE]', error);
+      this.handleSaveFailure("L'enregistrement ne s'est pas fait.");
+    } finally {
+      this.isSavingRemote.set(false);
+    }
+  }
+
+  private buildSaveRequestDto(): SaveAnnotationsRequestDto {
+    const img = this.currentImage();
+    if (!img) {
+      throw new Error('No current image');
+    }
+
+    return {
+      requestId: this.createRequestId(),
+      sentAt: new Date().toISOString(),
+      image: {
+        id: img.id,
+        name: img.name,
+        format: img.format,
+        size: img.size,
+        width: img.width,
+        height: img.height,
+        createdAt: img.createdAt,
+        src: img.src,
+      },
+      annotations: this.imageAnnotations().map((ann) => this.toSaveAnnotationDto(ann)),
+    };
+  }
+
+  private createRequestId(): string {
+    return `req_${Date.now()}_${Math.random().toString(16).slice(2)}`;
+  }
+
+  private toSaveAnnotationDto(ann: AnnotationItem): SaveAnnotationDto {
+    return {
+      id: ann.id,
+      imageId: ann.imageId,
+      defectLabel: ann.def,
+      severity: ann.sev,
+      description: ann.desc,
+      shapeLabel: ann.shape,
+      geometry: this.toSaveGeometryDto(ann.geometry),
+    };
+  }
+
+  private toSaveGeometryDto(geometry: Geometry): SaveGeometryDto {
+    if (geometry.type === 'bbox') {
+      return {
+        type: 'bbox',
+        bbox: {
+          nx: geometry.data.nx,
+          ny: geometry.data.ny,
+          nw: geometry.data.nw,
+          nh: geometry.data.nh,
+        },
+      };
+    }
+
+    if (geometry.type === 'polygon') {
+      return {
+        type: 'polygon',
+        polygon: {
+          points: geometry.data.points.map((p) => ({ nx: p.nx, ny: p.ny })),
+          closed: true,
+        },
+      };
+    }
+
+    return {
+      type: 'freehand',
+      freehand: {
+        points: geometry.data.points.map((p) => ({ nx: p.nx, ny: p.ny })),
+        closed: false,
+      },
+    };
+  }
+
+  private validateSaveRequest(dto: SaveAnnotationsRequestDto): string[] {
+    const errors: string[] = [];
+
+    if (!dto.image?.id) errors.push('Missing image id');
+    if (dto.image.id !== this.currentImage()?.id) errors.push('DTO image does not match current image');
+
+    for (const ann of dto.annotations) {
+      if (ann.imageId !== dto.image.id) errors.push(`Annotation ${ann.id}: imageId mismatch`);
+
+      if (ann.geometry.type === 'bbox') {
+        if (!(ann.geometry.bbox.nw > 0) || !(ann.geometry.bbox.nh > 0)) {
+          errors.push(`Annotation ${ann.id}: invalid bbox size`);
+        }
+        continue;
+      }
+
+      if (ann.geometry.type === 'polygon') {
+        const usefulPoints = this.countUniquePoints(ann.geometry.polygon.points);
+        if (usefulPoints < 3) errors.push(`Annotation ${ann.id}: polygon needs at least 3 useful points`);
+        continue;
+      }
+
+      if (ann.geometry.freehand.points.length < 2) {
+        errors.push(`Annotation ${ann.id}: freehand needs at least 2 points`);
+      }
+    }
+
+    return errors;
+  }
+
+  private countUniquePoints(points: NormPoint[]): number {
+    return new Set(points.map((p) => `${p.nx.toFixed(6)}:${p.ny.toFixed(6)}`)).size;
+  }
+
+  private saveToBackendDryRun$(dto: SaveAnnotationsRequestDto): Observable<SaveAnnotationsResponseDto> {
+    void this.http; // HttpClient intentionally injected for the future inactive HTTP pipeline below.
+
+    const receivedAt = new Date().toISOString();
+    const simulatedHeaders = {
+      'Content-Type': 'application/json',
+      'X-Vista-Dry-Run': 'true',
+      'X-Request-Id': dto.requestId,
+    };
+
+    console.groupCollapsed('[VISTA][DRY-RUN API] POST ' + this.SAVE_ENDPOINT);
+    console.log('endpoint:', this.SAVE_ENDPOINT);
+    console.log('method:', 'POST');
+    console.log('headers:', simulatedHeaders);
+    console.log('requestId:', dto.requestId);
+    console.log('sentAt:', dto.sentAt);
+    console.log('timestamp:', receivedAt);
+    console.log('imageId:', dto.image.id);
+    console.log('annotationsCount:', dto.annotations.length);
+    console.log('payload:', dto);
+    console.groupEnd();
+
+    return of({
+      success: true,
+      requestId: dto.requestId,
+      savedImageId: dto.image.id,
+      savedAnnotationsCount: dto.annotations.length,
+      backendMessage: 'Dry-run only: no external call has been made.',
+      receivedAt,
+    }).pipe(delay(300));
+  }
+
+  /*
+  private saveToBackendHttp$(dto: SaveAnnotationsRequestDto): Observable<SaveAnnotationsResponseDto> {
+    return this.http.post<SaveAnnotationsResponseDto>(
+      this.SAVE_ENDPOINT,
+      dto,
+      {
+        observe: 'response',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Request-Id': dto.requestId,
+        },
+      },
+    ).pipe(
+      timeout(10000),
+      map((response) => {
+        const body = response.body;
+        if (!body || body.success !== true || !body.requestId || body.requestId !== dto.requestId) {
+          throw new Error('Invalid backend response');
+        }
+        return body;
+      }),
+      catchError((error: unknown) => {
+        console.error('[VISTA][API] saveToBackend failed', error);
+        return throwError(() => new Error('SAVE_BACKEND_FAILED'));
+      }),
+    );
+  }
+  */
+
+  private handleSaveFailure(message: string): void {
+    const errorDto: SaveAnnotationsErrorDto = {
+      success: false,
+      requestId: this.createRequestId(),
+      backendMessage: message,
+      receivedAt: new Date().toISOString(),
+      errorCode: 'SAVE_BACKEND_FAILED',
+    };
+
+    console.error('[VISTA][SAVE][ERROR]', errorDto);
+    this.remoteSaveError.set(message);
+    this.openSavePopup({
+      kind: 'error',
+      title: 'Échec de l’enregistrement',
+      message: "L'enregistrement ne s'est pas fait.",
+    });
+  }
+
+  openSavePopup(state: Omit<SavePopupState, 'open'>): void {
+    this.savePopup.set({ open: true, ...state });
+  }
+
+  closeSavePopup(): void {
+    this.savePopup.set({
+      open: false,
+      kind: 'success',
+      title: '',
+      message: '',
+    });
+  }
+
+  private hasInProgressShape(): boolean {
+    return !!this.draftRectCurrent?.dragging
+      || this.draftPolygonCurrent.points.length > 0
+      || this.draftFreehandCurrent.drawing;
+  }
+
+  private commitDraftsToImageAnnotations(): number {
+    if (this.draftShapes.length === 0) return 0;
 
     const imgId = this.currentImage()?.id ?? 'unknown';
     const startId = this.nextAnnotationId;
@@ -466,69 +828,141 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
     this.nextAnnotationId += committed.length;
     this.imageAnnotations.update((prev) => [...prev, ...committed]);
 
-    // persist and clear drafts WITHOUT history (avoid undo resurrecting saved drafts)
-    this.persistState();
     this.clearDraftsNoHistory();
     this.undoStack = [];
     this.redoStack = [];
+
+    this.persistWorkspaceState();
     this.drawAnnotationsOnly();
+
+    return committed.length;
   }
 
-  private hasInProgressShape(): boolean {
-    return !!this.draftRectCurrent?.dragging || this.draftPolygonCurrent.points.length > 0 || this.draftFreehandCurrent.drawing;
+  private clearRemoteFeedback(): void {
+    this.remoteSaveSuccess.set(null);
+    this.remoteSaveError.set(null);
+    this.closeSavePopup();
   }
 
   // ---------------- Persistence (localStorage) ----------------
 
-  private readState(): PersistedAnnotationStateV1 | null {
+  private emptyDraftState(): PersistedDraftState {
+    return {
+      draftShapes: [],
+      draftRectCurrent: null,
+      draftPolygonCurrent: { points: [], closed: false },
+      polygonPreview: null,
+      draftFreehandCurrent: { points: [], drawing: false },
+    };
+  }
+
+  private currentDraftState(): PersistedDraftState {
+    return {
+      draftShapes: JSON.parse(JSON.stringify(this.draftShapes)),
+      draftRectCurrent: this.draftRectCurrent ? JSON.parse(JSON.stringify(this.draftRectCurrent)) : null,
+      draftPolygonCurrent: JSON.parse(JSON.stringify(this.draftPolygonCurrent)),
+      polygonPreview: this.polygonPreview ? JSON.parse(JSON.stringify(this.polygonPreview)) : null,
+      draftFreehandCurrent: JSON.parse(JSON.stringify(this.draftFreehandCurrent)),
+    };
+  }
+
+  private applyDraftState(state: PersistedDraftState | null | undefined): void {
+    const safe = state ?? this.emptyDraftState();
+    this.draftShapes = safe.draftShapes ?? [];
+    this.draftRectCurrent = safe.draftRectCurrent ?? null;
+    this.draftPolygonCurrent = safe.draftPolygonCurrent ?? { points: [], closed: false };
+    this.polygonPreview = safe.polygonPreview ?? null;
+    this.draftFreehandCurrent = safe.draftFreehandCurrent ?? { points: [], drawing: false };
+  }
+
+  private currentEditorState(): PersistedEditorState {
+    return {
+      selectedSeverity: this.selectedSeverity(),
+      annotationType: this.annotationType(),
+      annotationDesc: this.annotationDesc(),
+    };
+  }
+
+  private applyEditorState(state: PersistedEditorState | null | undefined): void {
+    if (!state) return;
+    this.selectedSeverity.set(state.selectedSeverity ?? 'Mineur');
+    this.annotationType.set(state.annotationType ?? 'Rayure profonde');
+    this.annotationDesc.set(state.annotationDesc ?? "Rayure profonde orientée à 45° sur la zone d'épaulement droite.");
+  }
+
+  private readWorkspaceState(): PersistedAnnotationWorkspaceV2 | null {
     if (!this.isBrowser) return null;
     try {
       const raw = localStorage.getItem(this.STORAGE_KEY);
       if (!raw) return null;
-
-      const parsed = JSON.parse(raw) as Partial<PersistedAnnotationStateV1>;
-      if (parsed.version !== 1 || typeof parsed.currentImageId !== 'string') return null;
-      if (!parsed.images || !parsed.annotationsByImageId || !parsed.viewByImageId) return null;
-
-      return parsed as PersistedAnnotationStateV1;
+      const parsed = JSON.parse(raw) as Partial<PersistedAnnotationWorkspaceV2>;
+      if (parsed.version !== 2) return null;
+      if (typeof parsed.currentImageId !== 'string') return null;
+      if (!parsed.images || !parsed.annotationsByImageId || !parsed.viewByImageId || !parsed.draftsByImageId) return null;
+      return parsed as PersistedAnnotationWorkspaceV2;
     } catch {
       return null;
     }
   }
 
-  private persistState(): void {
+  private persistWorkspaceState(): void {
     if (!this.isBrowser) return;
     const img = this.currentImage();
     if (!img) return;
 
-    const prev = this.readState();
-    const state: PersistedAnnotationStateV1 = {
-      version: 1,
+    const prev = this.readWorkspaceState();
+
+    const state: PersistedAnnotationWorkspaceV2 = {
+      version: 2,
       currentImageId: img.id,
-      images: { ...(prev?.images ?? {}), [img.id]: img },
-      annotationsByImageId: { ...(prev?.annotationsByImageId ?? {}), [img.id]: this.imageAnnotations() },
+      images: {
+        ...(prev?.images ?? {}),
+        [img.id]: img,
+      },
+      annotationsByImageId: {
+        ...(prev?.annotationsByImageId ?? {}),
+        [img.id]: this.imageAnnotations(),
+      },
       viewByImageId: {
         ...(prev?.viewByImageId ?? {}),
-        [img.id]: { zoom: this.zoom(), panOffset: this.panOffset() },
+        [img.id]: {
+          zoom: this.zoom(),
+          panOffset: this.panOffset(),
+        },
+      },
+      draftsByImageId: {
+        ...(prev?.draftsByImageId ?? {}),
+        [img.id]: this.currentDraftState(),
+      },
+      editorByImageId: {
+        ...(prev?.editorByImageId ?? {}),
+        [img.id]: this.currentEditorState(),
       },
     };
 
     try {
       localStorage.setItem(this.STORAGE_KEY, JSON.stringify(state));
     } catch {
-      // ignore quota
+      // ignore quota / storage failures
     }
   }
 
-  private restoreFromStorage(): boolean {
+  private persistDraftProgressThrottled(): void {
+    const now = Date.now();
+    if (now - this.lastDraftAutosaveAt < 250) return;
+    this.lastDraftAutosaveAt = now;
+    this.persistWorkspaceState();
+  }
+
+  private restoreWorkspaceFromStorage(): boolean {
     if (!this.isBrowser) return false;
-    const state = this.readState();
+
+    const state = this.readWorkspaceState();
     if (!state) return false;
 
     const img = state.images[state.currentImageId];
     if (!img) return false;
 
-    // clean transient state for image context
     this.resetTransientAnnotationState();
 
     this.currentImage.set(img);
@@ -537,7 +971,12 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
 
     const ann = state.annotationsByImageId?.[img.id] ?? [];
     this.imageAnnotations.set(ann.map((a) => ({ ...a, imageId: a.imageId ?? img.id })));
+
+    this.applyDraftState(state.draftsByImageId?.[img.id]);
+    this.applyEditorState(state.editorByImageId?.[img.id]);
+
     this.syncNextAnnotationId();
+    this.syncNextDraftId();
 
     this.imageFileName.set(img.name);
     this.imageFileMeta.set(`${img.format} · ${img.width}x${img.height}`);
@@ -547,6 +986,7 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
 
   private setDefaultImageAndSeed(): void {
     this.resetTransientAnnotationState();
+    this.clearRemoteFeedback();
 
     const img: ImageModel = {
       id: this.DEFAULT_IMAGE_ID,
@@ -600,11 +1040,22 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
     this.zoom.set(100);
     this.panOffset.set({ x: 0, y: 0 });
     this.syncNextAnnotationId();
+    this.persistWorkspaceState();
   }
 
   private syncNextAnnotationId(): void {
     const maxId = this.imageAnnotations().reduce((max, a) => Math.max(max, a.id), 0);
     this.nextAnnotationId = Math.max(1, maxId + 1);
+  }
+
+  private syncNextDraftId(): void {
+    const maxDraftId = this.draftShapes.reduce((max, draft) => {
+      const match = draft.id.match(/_(\d+)$/);
+      const numericId = match ? Number(match[1]) : 0;
+      return Number.isFinite(numericId) ? Math.max(max, numericId) : max;
+    }, 0);
+
+    this.nextDraftId = Math.max(1, maxDraftId + 1);
   }
 
   private newImageId(prefix: string): string {
@@ -619,6 +1070,7 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
 
       // new image context -> reset transient state
       this.resetTransientAnnotationState();
+      this.clearRemoteFeedback();
 
       const img: ImageModel = {
         id: this.newImageId('upload'),
@@ -642,7 +1094,7 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
       this.imageFileName.set(img.name);
       this.imageFileMeta.set(`${img.format} · — · ${this.formatBytes(file.size)}`);
 
-      this.persistState();
+      this.persistWorkspaceState();
       this.loadImageFromSrc(src, true);
     };
     reader.readAsDataURL(file);
@@ -666,7 +1118,7 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
           this.imageFileMeta.set(`${updated.format} · ${updated.width}x${updated.height}${sizePart}`);
         }
 
-        this.persistState();
+        this.persistWorkspaceState();
       }
 
       this.drawBaseImage();
@@ -990,7 +1442,9 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
     this.drawCanvas.nativeElement.setPointerCapture?.(e.pointerId);
 
     if (tool === 'rect') {
+      this.clearRemoteFeedback();
       this.draftRectCurrent = { start: point, end: point, dragging: true };
+      this.persistWorkspaceState();
       this.drawAnnotationsOnly();
       return;
     }
@@ -1005,26 +1459,32 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
         const dist = Math.hypot(canvasPoint.x - firstPx.x, canvasPoint.y - firstPx.y);
 
         if (dist <= this.CLOSE_TOL_PX) {
+          this.clearRemoteFeedback();
           const meta = this.snapshotMeta('polygon');
           const geometry: Geometry = { type: 'polygon', data: { points: this.draftPolygonCurrent.points.slice(), closed: true } };
           this.pushHistory();
           this.draftShapes.push({ id: this.createDraftId('poly'), meta, geometry });
           this.draftPolygonCurrent = { points: [], closed: false };
           this.polygonPreview = null;
+          this.persistWorkspaceState();
           this.drawAnnotationsOnly();
           return;
         }
       }
 
+      this.clearRemoteFeedback();
       this.pushHistory(); // undo point-by-point
       this.draftPolygonCurrent.points.push(point);
+      this.persistWorkspaceState();
       this.drawAnnotationsOnly();
       return;
     }
 
     // freehand: atomic undo => pushHistory only at START (not during move)
+    this.clearRemoteFeedback();
     this.pushHistory();
     this.draftFreehandCurrent = { points: [point], drawing: true };
+    this.persistWorkspaceState();
     this.drawAnnotationsOnly();
   }
 
@@ -1046,19 +1506,24 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
 
     if (tool === 'rect' && this.draftRectCurrent?.dragging && point) {
       this.draftRectCurrent.end = point;
+      this.persistDraftProgressThrottled();
       this.drawAnnotationsOnly();
       return;
     }
 
     if (tool === 'polygon') {
       this.polygonPreview = point ? { nx: point.nx, ny: point.ny } : null;
-      if (this.draftPolygonCurrent.points.length > 0) this.drawAnnotationsOnly();
+      if (this.draftPolygonCurrent.points.length > 0) {
+        this.persistDraftProgressThrottled();
+        this.drawAnnotationsOnly();
+      }
       return;
     }
 
     if (tool === 'freehand' && this.draftFreehandCurrent.drawing && point) {
       this.draftFreehandCurrent.points.push(point);
       if (this.draftFreehandCurrent.points.length > 3000) this.draftFreehandCurrent.points.shift();
+      this.persistDraftProgressThrottled();
       this.drawAnnotationsOnly();
     }
   }
@@ -1070,7 +1535,7 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
       this.isPanning = false;
       this.drawBaseImage();
       this.drawAnnotationsOnly();
-      this.persistState(); // persist view on pan end
+      this.persistWorkspaceState(); // persist view on pan end
       return;
     }
 
@@ -1086,6 +1551,8 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
         this.draftShapes.push({ id: this.createDraftId('bbox'), meta, geometry });
       }
       this.draftRectCurrent = null;
+      this.clearRemoteFeedback();
+      this.persistWorkspaceState();
       this.drawAnnotationsOnly();
       return;
     }
@@ -1104,11 +1571,15 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
         this.draftShapes.push({ id: this.createDraftId('lasso'), meta, geometry });
 
         this.draftFreehandCurrent = { points: [], drawing: false };
+        this.clearRemoteFeedback();
+        this.persistWorkspaceState();
         this.drawAnnotationsOnly();
         return;
       }
 
       this.draftFreehandCurrent = { points: [], drawing: false };
+      this.clearRemoteFeedback();
+      this.persistWorkspaceState();
       this.drawAnnotationsOnly();
     }
   }
