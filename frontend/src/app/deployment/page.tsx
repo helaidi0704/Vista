@@ -24,6 +24,7 @@ export default function DeploymentPage() {
   const [compareIds, setCompareIds] = useState<string[]>([]);
   const [compareResult, setCompareResult] = useState<any>(null);
   const [comparing, setComparing] = useState(false);
+  const [exporting, setExporting] = useState<string|null>(null);
   const [selectedModel, setSelectedModel] = useState<MLModel | null>(null);
   const [modelStats, setModelStats] = useState<ModelStats | null>(null);
   const [activeFormat, setActiveFormat] = useState(0);
@@ -130,6 +131,29 @@ export default function DeploymentPage() {
   const anomalyRate = modelStats?.usage ? (modelStats.usage.anomaly_count / Math.max(modelStats.usage.total_inferences, 1) * 100) : 0;
   const apiHost = typeof window !== "undefined" ? window.location.hostname : "localhost";
 
+  async function exportModel(modelId:string, modelName:string){
+    setExporting(modelId);
+    try{
+      const{data}=await api.post("/api/v1/deployments",{model_id:modelId,target:"onnx",format:"onnx"});
+      // Poll for completion
+      const checkExport=async()=>{
+        try{
+          const{data:dl}=await api.get("/api/v1/deployments/"+data.id+"/download");
+          if(dl.download_url){
+            window.open(dl.download_url,"_blank");
+            setExporting(null);
+          }else{
+            setTimeout(checkExport,2000);
+          }
+        }catch{setTimeout(checkExport,2000);}
+      };
+      setTimeout(checkExport,3000);
+    }catch(e){
+      console.error(e);
+      alert("Export en cours ou deja disponible. Verifiez MinIO.");
+      setExporting(null);
+    }
+  }
   async function compareModels(){
     if(compareIds.length<2)return;
     setComparing(true);
@@ -197,7 +221,12 @@ export default function DeploymentPage() {
                 <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 4 }}>{m.name}</div>
                 <span className={"tag " + (m.status === "ready" ? "tag-green" : "tag-orange")}>{m.status}</span>
               </div>
-              <span style={{ fontSize: 11, color: "var(--text3)" }}>{m.architecture}</span>
+              <div style={{display:"flex",flexDirection:"column",alignItems:"flex-end",gap:4}}>
+                <span style={{ fontSize: 11, color: "var(--text3)" }}>{m.architecture}</span>
+                <button className="btn btn-sm btn-secondary" onClick={(e:any)=>{e.stopPropagation();exportModel(m.id,m.name);}} disabled={exporting===m.id} style={{fontSize:10,padding:"2px 8px"}}>
+                  {exporting===m.id?"Exporting...":"ONNX Export"}
+                </button>
+              </div>
             </div>
             <div style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 12, color: "var(--text2)" }}>
               <div style={{ display: "flex", justifyContent: "space-between" }}>
