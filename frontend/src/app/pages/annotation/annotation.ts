@@ -17,7 +17,7 @@ import { delay, firstValueFrom, Observable, of } from 'rxjs';
 
 type Tool = 'pan' | 'rect' | 'polygon' | 'freehand';
 type SeverityUi = 'Critique' | 'Majeur' | 'Mineur';
-type SavePopupKind = 'success' | 'error';
+type SaveToastKind = 'success' | 'error';
 
 interface NormPoint {
   nx: number;
@@ -69,12 +69,12 @@ interface DraftShape {
 interface ImageModel {
   id: string;
   name: string;
-  src: string;            // dataURL or /assets/...
-  format: string;         // PNG/JPG/IMG
-  size?: number;          // bytes (uploads)
+  src: string;
+  format: string;
+  size?: number;
   width: number;
   height: number;
-  createdAt: string;      // ISO
+  createdAt: string;
 }
 
 interface PersistedAnnotationWorkspaceV2 {
@@ -151,10 +151,9 @@ interface SaveAnnotationsErrorDto {
   errorCode?: string;
 }
 
-interface SavePopupState {
-  open: boolean;
-  kind: SavePopupKind;
-  title: string;
+interface SaveToastState {
+  visible: boolean;
+  kind: SaveToastKind;
   message: string;
 }
 
@@ -164,6 +163,18 @@ interface UndoState {
   draftPolygonCurrent: { points: NormPoint[]; closed: boolean };
   polygonPreview: NormPoint | null;
   draftFreehandCurrent: { points: NormPoint[]; drawing: boolean };
+}
+
+type LayerSelection =
+  | { kind: 'draft'; draftId: string }
+  | { kind: 'annotation'; annotationId: number }
+  | null;
+
+interface ResolvedLayerSelection {
+  kind: 'draft' | 'annotation';
+  label: string;
+  icon: string;
+  removable: boolean;
 }
 
 @Component({
@@ -199,7 +210,6 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
     'Pièce manquante',
   ] as const;
 
-  // Viewer state
   zoom = signal(100);
   currentTool = signal<Tool>('rect');
 
@@ -207,41 +217,37 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
   annotationType = signal('Rayure profonde');
   annotationDesc = signal("Rayure profonde orientée à 45° sur la zone d'épaulement droite.");
 
-  // Image UI (kept for template)
   imageFileName = signal(this.DEFAULT_IMAGE_NAME);
   imageFileMeta = signal('RGB · 1920x1080 · 2.4 MB');
 
-  // Current image model
   currentImage = signal<ImageModel | null>(null);
 
   isSavingRemote = signal(false);
   remoteSaveSuccess = signal<string | null>(null);
   remoteSaveError = signal<string | null>(null);
-  savePopup = signal<SavePopupState>({
-    open: false,
+
+  saveToast = signal<SaveToastState>({
+    visible: false,
     kind: 'success',
-    title: '',
     message: '',
   });
 
-  // Persisted annotations for CURRENT image only
+  selectedLayer = signal<LayerSelection>(null);
+
   imageAnnotations = signal<AnnotationItem[]>([]);
   hoveredAnnotId = signal<number | null>(null);
 
-  // Drafts + in-progress shapes
   private draftShapes: DraftShape[] = [];
   private draftRectCurrent: { start: NormPoint; end: NormPoint; dragging: boolean } | null = null;
   private draftPolygonCurrent: { points: NormPoint[]; closed: boolean } = { points: [], closed: false };
   private polygonPreview: NormPoint | null = null;
   private draftFreehandCurrent: { points: NormPoint[]; drawing: boolean } = { points: [], drawing: false };
 
-  // Pan
   private panOffset = signal({ x: 0, y: 0 });
   private isPanning = false;
   private panStart = { x: 0, y: 0 };
   private panStartOffset = { x: 0, y: 0 };
 
-  // Rendering
   private loadedImageObj: HTMLImageElement | null = null;
   private imageRenderRect = { x: 0, y: 0, w: 0, h: 0 };
 
@@ -249,17 +255,15 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
   private nextAnnotationId = 1;
   private nextDraftId = 1;
   private lastDraftAutosaveAt = 0;
+  private toastTimeoutId: ReturnType<typeof setTimeout> | null = null;
 
-  // Pointer listeners
   private onPointerDownRef?: (e: PointerEvent) => void;
   private onPointerMoveRef?: (e: PointerEvent) => void;
   private onPointerUpRef?: (e: PointerEvent) => void;
 
-  // Undo/redo for drafts only
   private undoStack: UndoState[] = [];
   private redoStack: UndoState[] = [];
 
-  // Wheel zoom handler (focus under cursor, DOES NOT change tool)
   private onWheelZoom = (e: WheelEvent): void => {
     if (this.imageRenderRect.w === 0) return;
     e.preventDefault();
@@ -268,7 +272,7 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
     const current = this.zoom();
 
     const factor = delta > 0 ? 1.1 : 0.9;
-    let next = Math.round(Math.max(20, Math.min(1200, current * factor)));
+    const next = Math.round(Math.max(20, Math.min(1200, current * factor)));
     if (next === current) return;
 
     const canvasPos = this.pointerToCanvasPosition(e);
@@ -278,21 +282,16 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
     const iw = this.imageRenderRect.w;
     const ih = this.imageRenderRect.h;
 
-    // normalized position within current rendered image
     const u = (canvasPos.x - ix) / iw;
     const v = (canvasPos.y - iy) / ih;
 
-    // set zoom
     this.zoom.set(next);
 
-    // First redraw to compute new imageRenderRect with same panOffset
     this.drawBaseImage();
 
-    // Compute baseX/baseY from current rect and panOffset: x = baseX + panOffset.x
     const baseX = this.imageRenderRect.x - this.panOffset().x;
     const baseY = this.imageRenderRect.y - this.panOffset().y;
 
-    // We want: canvasPos.x = newX + u*newW, where newX = baseX + newPanX
     const newW = this.imageRenderRect.w;
     const newH = this.imageRenderRect.h;
 
@@ -304,10 +303,9 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
       y: desiredY - baseY,
     });
 
-    // redraw (drawBaseImage clamps panOffset)
     this.drawBaseImage();
     this.drawAnnotationsOnly();
-    this.persistWorkspaceState(); // persist view (wheel modifies zoom+pan)
+    this.persistWorkspaceState();
   };
 
   ngAfterViewInit(): void {
@@ -331,15 +329,25 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
 
   ngOnDestroy(): void {
     const canvas = this.drawCanvas?.nativeElement;
-    if (!canvas) return;
+    if (canvas) {
+      if (this.onPointerDownRef) canvas.removeEventListener('pointerdown', this.onPointerDownRef);
+      if (this.onPointerMoveRef) canvas.removeEventListener('pointermove', this.onPointerMoveRef);
+      if (this.onPointerUpRef) canvas.removeEventListener('pointerup', this.onPointerUpRef);
+      canvas.removeEventListener('wheel', this.onWheelZoom);
+    }
 
-    if (this.onPointerDownRef) canvas.removeEventListener('pointerdown', this.onPointerDownRef);
-    if (this.onPointerMoveRef) canvas.removeEventListener('pointermove', this.onPointerMoveRef);
-    if (this.onPointerUpRef) canvas.removeEventListener('pointerup', this.onPointerUpRef);
-    canvas.removeEventListener('wheel', this.onWheelZoom);
+    if (this.toastTimeoutId) {
+      clearTimeout(this.toastTimeoutId);
+      this.toastTimeoutId = null;
+    }
   }
 
-  // ---------------- UI actions ----------------
+  @HostListener('document:pointerdown')
+  onDocumentPointerDown(): void {
+    if (this.saveToast().visible) {
+      this.hideSaveToast();
+    }
+  }
 
   setTool(tool: Tool): void {
     this.clearRemoteFeedback();
@@ -352,18 +360,44 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
   setSeverity(severity: SeverityUi): void {
     this.clearRemoteFeedback();
     this.selectedSeverity.set(severity);
+
+    const scls = this.severityToClass(severity);
+    const selected = this.selectedLayer();
+
+    if (selected?.kind === 'annotation') {
+      this.updateSelectedLayerMeta({ sev: severity, scls });
+    } else if (this.draftShapes.length > 0) {
+      this.updateAllDraftsMeta({ sev: severity, scls });
+    }
+
     this.persistWorkspaceState();
   }
 
   updateAnnotationType(value: string): void {
     this.clearRemoteFeedback();
     this.annotationType.set(value);
+
+    const selected = this.selectedLayer();
+    if (selected?.kind === 'annotation') {
+      this.updateSelectedLayerMeta({ def: value });
+    } else if (this.draftShapes.length > 0) {
+      this.updateAllDraftsMeta({ def: value });
+    }
+
     this.persistWorkspaceState();
   }
 
   updateAnnotationDesc(value: string): void {
     this.clearRemoteFeedback();
     this.annotationDesc.set(value);
+
+    const selected = this.selectedLayer();
+    if (selected?.kind === 'annotation') {
+      this.updateSelectedLayerMeta({ desc: value });
+    } else if (this.draftShapes.length > 0) {
+      this.updateAllDraftsMeta({ desc: value });
+    }
+
     this.persistWorkspaceState();
   }
 
@@ -374,7 +408,6 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
     next = Math.round(Math.max(20, Math.min(1200, next)));
 
     this.zoom.set(next);
-    // slider zoom => auto switch to pan
     this.currentTool.set('pan');
 
     this.drawBaseImage();
@@ -394,12 +427,78 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
     this.drawAnnotationsOnly();
   }
 
+  isAnnotationRowHighlighted(id: number): boolean {
+    const selected = this.selectedLayer();
+    return this.hoveredAnnotId() === id || (selected?.kind === 'annotation' && selected.annotationId === id);
+  }
+
+  editAnnotation(id: number): void {
+    this.clearRemoteFeedback();
+    this.selectAnnotationById(id);
+  }
+
   deleteAnnotation(id: number): void {
     this.clearRemoteFeedback();
     this.imageAnnotations.update((annots) => annots.filter((a) => a.id !== id));
-    if (this.hoveredAnnotId() === id) this.hoveredAnnotId.set(null);
+
+    if (this.hoveredAnnotId() === id) {
+      this.hoveredAnnotId.set(null);
+    }
+
+    const selected = this.selectedLayer();
+    if (selected?.kind === 'annotation' && selected.annotationId === id) {
+      this.selectedLayer.set(null);
+    }
+
     this.persistWorkspaceState();
     this.drawAnnotationsOnly();
+  }
+
+  removeCurrentLayer(): void {
+    const selected = this.selectedLayer();
+    if (!selected) return;
+
+    this.clearRemoteFeedback();
+
+    if (selected.kind === 'draft') {
+      this.draftShapes = this.draftShapes.filter((d) => d.id !== selected.draftId);
+      this.selectedLayer.set(null);
+      this.persistWorkspaceState();
+      this.drawAnnotationsOnly();
+      return;
+    }
+
+    this.deleteAnnotation(selected.annotationId);
+    this.selectedLayer.set(null);
+    this.persistWorkspaceState();
+    this.drawAnnotationsOnly();
+  }
+
+  clearLayerSelection(): void {
+    this.selectedLayer.set(null);
+    this.persistWorkspaceState();
+    this.drawAnnotationsOnly();
+  }
+
+  hasCurrentLayer(): boolean {
+    return this.resolveSelectedLayer() !== null;
+  }
+
+  currentLayerLabel(): string {
+    const selected = this.resolveSelectedLayer();
+    if (!selected) return 'Aucun calque sélectionné';
+    return selected.label;
+  }
+
+  currentLayerKindLabel(): string {
+    const selected = this.resolveSelectedLayer();
+    if (!selected) return 'Aucun';
+    return selected.kind === 'draft' ? 'Draft' : 'Annotation';
+  }
+
+  currentLayerShape(): string {
+    const selected = this.resolveSelectedLayer();
+    return selected?.icon ?? '•';
   }
 
   draftCount(): number {
@@ -411,9 +510,7 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
     switch (this.currentTool()) {
       case 'rect':
       case 'polygon':
-        return 'crosshair';
       case 'freehand':
-        return 'url("data:image/svg+xml;utf8,<svg xmlns=\'http://www.w3.org/2000/svg\' width=\'16\' height=\'16\' fill=\'none\' stroke=\'%23E06C00\' stroke-width=\'2\'><circle cx=\'8\' cy=\'8\' r=\'4\'/></svg>") 8 8, auto';
       default:
         return 'crosshair';
     }
@@ -431,8 +528,6 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
     this.loadImageFile(file);
     input.value = '';
   }
-
-  // ---------------- Undo / Redo (draft-level) ----------------
 
   @HostListener('window:keydown', ['$event'])
   onKeyDown(e: KeyboardEvent): void {
@@ -453,7 +548,6 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
   }
 
   private snapshotState(): UndoState {
-    // deep clone (draft-only)
     return JSON.parse(
       JSON.stringify({
         draftShapes: this.draftShapes,
@@ -478,7 +572,6 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
   private pushHistory(): void {
     this.undoStack.push(this.snapshotState());
     this.redoStack = [];
-    // optional cap
     if (this.undoStack.length > 80) this.undoStack.shift();
   }
 
@@ -490,6 +583,7 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
 
     const prev = this.undoStack.pop();
     if (prev) this.restoreState(prev);
+
     this.clearRemoteFeedback();
     this.persistWorkspaceState();
   }
@@ -502,11 +596,10 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
 
     const next = this.redoStack.pop();
     if (next) this.restoreState(next);
+
     this.clearRemoteFeedback();
     this.persistWorkspaceState();
   }
-
-  // ---------------- Draft lifecycle ----------------
 
   private clearDraftsNoHistory(): void {
     this.draftShapes = [];
@@ -519,6 +612,7 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
   private resetTransientAnnotationState(): void {
     this.clearDraftsNoHistory();
     this.hoveredAnnotId.set(null);
+    this.selectedLayer.set(null);
 
     this.isPanning = false;
     this.panStart = { x: 0, y: 0 };
@@ -538,6 +632,7 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
     if (hasAnyDraft) this.pushHistory();
 
     this.clearDraftsNoHistory();
+    this.selectedLayer.set(null);
     this.clearRemoteFeedback();
     this.persistWorkspaceState();
     this.drawAnnotationsOnly();
@@ -546,7 +641,7 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
   async saveToBackend(): Promise<void> {
     this.remoteSaveSuccess.set(null);
     this.remoteSaveError.set(null);
-    this.closeSavePopup();
+    this.hideSaveToast();
 
     const img = this.currentImage();
     if (!img) {
@@ -595,12 +690,12 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
       }
 
       this.remoteSaveSuccess.set(`Enregistrement préparé (${response.savedAnnotationsCount} annotation(s)).`);
-      this.openSavePopup({
-        kind: 'success',
-        title: 'Enregistrement réussi',
-        message: 'Les données ont été préparées côté frontend. Aucun appel externe réel n’a été effectué.',
-      });
+      this.showSaveToast('success', 'Enregistrement réussi.');
+
+      this.annotationDesc.set('');
+      this.selectedLayer.set(null);
       this.persistWorkspaceState();
+      this.drawAnnotationsOnly();
     } catch (error) {
       console.error('[VISTA][SAVE]', error);
       this.handleSaveFailure("L'enregistrement ne s'est pas fait.");
@@ -715,7 +810,7 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
   }
 
   private saveToBackendDryRun$(dto: SaveAnnotationsRequestDto): Observable<SaveAnnotationsResponseDto> {
-    void this.http; // HttpClient intentionally injected for the future inactive HTTP pipeline below.
+    void this.http;
 
     const receivedAt = new Date().toISOString();
     const simulatedHeaders = {
@@ -786,22 +881,35 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
 
     console.error('[VISTA][SAVE][ERROR]', errorDto);
     this.remoteSaveError.set(message);
-    this.openSavePopup({
-      kind: 'error',
-      title: 'Échec de l’enregistrement',
-      message: "L'enregistrement ne s'est pas fait.",
+    this.showSaveToast('error', "L'enregistrement ne s'est pas fait.");
+  }
+
+  private showSaveToast(kind: SaveToastKind, message: string, durationMs = 2800): void {
+    if (this.toastTimeoutId) {
+      clearTimeout(this.toastTimeoutId);
+      this.toastTimeoutId = null;
+    }
+
+    this.saveToast.set({
+      visible: true,
+      kind,
+      message,
     });
+
+    this.toastTimeoutId = setTimeout(() => {
+      this.hideSaveToast();
+    }, durationMs);
   }
 
-  openSavePopup(state: Omit<SavePopupState, 'open'>): void {
-    this.savePopup.set({ open: true, ...state });
-  }
+  hideSaveToast(): void {
+    if (this.toastTimeoutId) {
+      clearTimeout(this.toastTimeoutId);
+      this.toastTimeoutId = null;
+    }
 
-  closeSavePopup(): void {
-    this.savePopup.set({
-      open: false,
+    this.saveToast.set({
+      visible: false,
       kind: 'success',
-      title: '',
       message: '',
     });
   }
@@ -814,6 +922,11 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
 
   private commitDraftsToImageAnnotations(): number {
     if (this.draftShapes.length === 0) return 0;
+
+    const selected = this.selectedLayer();
+    if (selected?.kind === 'draft') {
+      this.selectedLayer.set(null);
+    }
 
     const imgId = this.currentImage()?.id ?? 'unknown';
     const startId = this.nextAnnotationId;
@@ -841,10 +954,8 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
   private clearRemoteFeedback(): void {
     this.remoteSaveSuccess.set(null);
     this.remoteSaveError.set(null);
-    this.closeSavePopup();
+    this.hideSaveToast();
   }
-
-  // ---------------- Persistence (localStorage) ----------------
 
   private emptyDraftState(): PersistedDraftState {
     return {
@@ -1003,7 +1114,6 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
     this.imageFileName.set(img.name);
     this.imageFileMeta.set('PNG · —');
 
-    // demo seed annotations (default image only)
     this.imageAnnotations.set([
       {
         id: 1,
@@ -1068,7 +1178,6 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
       if (typeof reader.result !== 'string') return;
       const src = reader.result;
 
-      // new image context -> reset transient state
       this.resetTransientAnnotationState();
       this.clearRemoteFeedback();
 
@@ -1087,7 +1196,6 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
       this.imageAnnotations.set([]);
       this.syncNextAnnotationId();
 
-      // reset view for new image
       this.zoom.set(100);
       this.panOffset.set({ x: 0, y: 0 });
 
@@ -1131,8 +1239,6 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
       this.drawAnnotationsOnly();
     };
   }
-
-  // ---------------- Rendering ----------------
 
   @HostListener('window:resize')
   onResize(): void {
@@ -1179,7 +1285,6 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
     if (imgRatio > cvRatio) drawHeight = width / imgRatio;
     else drawWidth = height * imgRatio;
 
-    // zoom
     const scale = this.getZoomScale();
     drawWidth *= scale;
     drawHeight *= scale;
@@ -1194,7 +1299,6 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
     let x = baseX + nextPanX;
     let y = baseY + nextPanY;
 
-    // clamp X
     if (drawWidth <= width) {
       x = baseX;
       nextPanX = 0;
@@ -1205,7 +1309,6 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
       nextPanX = x - baseX;
     }
 
-    // clamp Y
     if (drawHeight <= height) {
       y = baseY;
       nextPanY = 0;
@@ -1233,28 +1336,23 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
     ctx.clearRect(0, 0, drawCanvas.width, drawCanvas.height);
     if (this.imageRenderRect.w === 0) return;
 
-    // persisted
     for (const ann of this.imageAnnotations()) {
       this.drawGeometry(ctx, ann.geometry, ann.id, ann.scls, ann.def, false);
     }
 
-    // drafts
     for (const draft of this.draftShapes) {
       this.drawGeometry(ctx, draft.geometry, -1, 'draft', draft.meta.def, true);
     }
 
-    // rect preview
     if (this.draftRectCurrent?.dragging) {
       const bbox = this.rectToBbox(this.draftRectCurrent.start, this.draftRectCurrent.end);
       if (bbox) this.drawGeometry(ctx, { type: 'bbox', data: bbox }, -2, 'draft', 'Draft', true);
     }
 
-    // polygon preview + handles
     if (this.draftPolygonCurrent.points.length > 0) {
       this.drawDraftPolygonOverlay(ctx);
     }
 
-    // freehand preview stroke
     if (this.draftFreehandCurrent.drawing && this.draftFreehandCurrent.points.length > 1) {
       const geometry: Geometry = { type: 'freehand', data: { points: this.draftFreehandCurrent.points, closed: false } };
       this.drawGeometry(ctx, geometry, -3, 'draft', 'Draft', true);
@@ -1269,17 +1367,20 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
     label: string,
     isDraft: boolean,
   ): void {
-    const hovered = !isDraft && this.hoveredAnnotId() === annId;
+    const highlighted =
+      !isDraft &&
+      (this.hoveredAnnotId() === annId || this.isAnnotationSelected(annId));
+
     const colors = this.getColors(sevClass);
 
     ctx.save();
     ctx.lineJoin = 'round';
     ctx.lineCap = 'round';
-    ctx.lineWidth = hovered ? 3 : 2;
+    ctx.lineWidth = highlighted ? 3 : 2;
     ctx.strokeStyle = colors.main;
     ctx.fillStyle = colors.fill;
 
-    if (hovered) {
+    if (highlighted) {
       ctx.shadowColor = colors.main;
       ctx.shadowBlur = 10;
     }
@@ -1361,7 +1462,6 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
     }
     ctx.stroke();
 
-    // handles
     for (const pt of this.draftPolygonCurrent.points) {
       const px = ix + pt.nx * iw;
       const py = iy + pt.ny * ih;
@@ -1374,7 +1474,6 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
       ctx.stroke();
     }
 
-    // tolerance circle first point
     if (this.draftPolygonCurrent.points.length > 0) {
       const first = this.draftPolygonCurrent.points[0];
       const fx = ix + first.nx * iw;
@@ -1395,8 +1494,6 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
     if (sevClass === 'tag-orange') return { main: '#FFD60A', fill: 'rgba(255,214,10,0.2)' };
     return { main: '#00C7BE', fill: 'rgba(0,199,190,0.15)' };
   }
-
-  // ---------------- Events wiring ----------------
 
   private setupDrawingInteraction(): void {
     const canvas = this.drawCanvas.nativeElement;
@@ -1463,9 +1560,17 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
           const meta = this.snapshotMeta('polygon');
           const geometry: Geometry = { type: 'polygon', data: { points: this.draftPolygonCurrent.points.slice(), closed: true } };
           this.pushHistory();
-          this.draftShapes.push({ id: this.createDraftId('poly'), meta, geometry });
+
+          const newDraft: DraftShape = {
+            id: this.createDraftId('poly'),
+            meta,
+            geometry,
+          };
+
+          this.draftShapes.push(newDraft);
           this.draftPolygonCurrent = { points: [], closed: false };
           this.polygonPreview = null;
+          this.selectDraftById(newDraft.id);
           this.persistWorkspaceState();
           this.drawAnnotationsOnly();
           return;
@@ -1473,14 +1578,13 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
       }
 
       this.clearRemoteFeedback();
-      this.pushHistory(); // undo point-by-point
+      this.pushHistory();
       this.draftPolygonCurrent.points.push(point);
       this.persistWorkspaceState();
       this.drawAnnotationsOnly();
       return;
     }
 
-    // freehand: atomic undo => pushHistory only at START (not during move)
     this.clearRemoteFeedback();
     this.pushHistory();
     this.draftFreehandCurrent = { points: [point], drawing: true };
@@ -1535,7 +1639,7 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
       this.isPanning = false;
       this.drawBaseImage();
       this.drawAnnotationsOnly();
-      this.persistWorkspaceState(); // persist view on pan end
+      this.persistWorkspaceState();
       return;
     }
 
@@ -1548,7 +1652,9 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
         this.pushHistory();
         const meta = this.snapshotMeta('bbox');
         const geometry: Geometry = { type: 'bbox', data: bbox };
-        this.draftShapes.push({ id: this.createDraftId('bbox'), meta, geometry });
+        const newDraft: DraftShape = { id: this.createDraftId('bbox'), meta, geometry };
+        this.draftShapes.push(newDraft);
+        this.selectDraftById(newDraft.id);
       }
       this.draftRectCurrent = null;
       this.clearRemoteFeedback();
@@ -1568,9 +1674,11 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
         meta.shape = '〰️ Lasso';
 
         const geometry: Geometry = { type: 'polygon', data: { points: loop, closed: true } };
-        this.draftShapes.push({ id: this.createDraftId('lasso'), meta, geometry });
+        const newDraft: DraftShape = { id: this.createDraftId('lasso'), meta, geometry };
+        this.draftShapes.push(newDraft);
 
         this.draftFreehandCurrent = { points: [], drawing: false };
+        this.selectDraftById(newDraft.id);
         this.clearRemoteFeedback();
         this.persistWorkspaceState();
         this.drawAnnotationsOnly();
@@ -1584,11 +1692,9 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
     }
   }
 
-  // ---------------- Geometry helpers ----------------
-
   private snapshotMeta(kind: Geometry['type']): AnnotationMeta {
     const sev = this.selectedSeverity();
-    const scls: AnnotationMeta['scls'] = sev === 'Critique' ? 'tag-red' : sev === 'Majeur' ? 'tag-orange' : 'tag-cyan';
+    const scls: AnnotationMeta['scls'] = this.severityToClass(sev);
     const shape = kind === 'bbox' ? '🟥 BBox' : kind === 'polygon' ? '🔷 Polygon' : '〰️ Tracé libre';
 
     return { def: this.annotationType(), sev, scls, desc: this.annotationDesc(), shape };
@@ -1598,6 +1704,103 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
     const id = `${prefix}_${this.nextDraftId}`;
     this.nextDraftId += 1;
     return id;
+  }
+
+  private severityToClass(sev: SeverityUi): AnnotationMeta['scls'] {
+    return sev === 'Critique' ? 'tag-red' : sev === 'Majeur' ? 'tag-orange' : 'tag-cyan';
+  }
+
+  private updateAllDraftsMeta(patch: Partial<Pick<AnnotationMeta, 'def' | 'sev' | 'scls' | 'desc'>>): void {
+    if (this.draftShapes.length === 0) return;
+
+    this.draftShapes = this.draftShapes.map((draft) => ({
+      ...draft,
+      meta: {
+        ...draft.meta,
+        ...patch,
+      },
+    }));
+
+    this.persistWorkspaceState();
+    this.drawAnnotationsOnly();
+  }
+
+  private updateSelectedLayerMeta(patch: Partial<Pick<AnnotationMeta, 'def' | 'sev' | 'scls' | 'desc'>>): void {
+    const selected = this.selectedLayer();
+    if (!selected || selected.kind !== 'annotation') return;
+
+    const ann = this.imageAnnotations().find((a) => a.id === selected.annotationId);
+    if (!ann) return;
+
+    this.imageAnnotations.update((annots) =>
+      annots.map((item) =>
+        item.id === selected.annotationId
+          ? {
+              ...item,
+              ...patch,
+            }
+          : item,
+      ),
+    );
+
+    this.persistWorkspaceState();
+    this.drawAnnotationsOnly();
+  }
+
+  private selectDraftById(draftId: string): void {
+    const draft = this.draftShapes.find((d) => d.id === draftId);
+    if (!draft) return;
+
+    this.selectedLayer.set({ kind: 'draft', draftId });
+    this.selectedSeverity.set(draft.meta.sev);
+    this.annotationType.set(draft.meta.def);
+    this.annotationDesc.set(draft.meta.desc);
+    this.persistWorkspaceState();
+    this.drawAnnotationsOnly();
+  }
+
+  private selectAnnotationById(annotationId: number): void {
+    const ann = this.imageAnnotations().find((a) => a.id === annotationId);
+    if (!ann) return;
+
+    this.selectedLayer.set({ kind: 'annotation', annotationId });
+    this.selectedSeverity.set(ann.sev);
+    this.annotationType.set(ann.def);
+    this.annotationDesc.set(ann.desc);
+    this.persistWorkspaceState();
+    this.drawAnnotationsOnly();
+  }
+
+  private resolveSelectedLayer(): ResolvedLayerSelection | null {
+    const selected = this.selectedLayer();
+    if (!selected) return null;
+
+    if (selected.kind === 'draft') {
+      const draft = this.draftShapes.find((d) => d.id === selected.draftId);
+      if (!draft) return null;
+
+      return {
+        kind: 'draft',
+        label: `Draft ${draft.id}`,
+        icon: '✎',
+        removable: true,
+      };
+    }
+
+    const ann = this.imageAnnotations().find((a) => a.id === selected.annotationId);
+    if (!ann) return null;
+
+    return {
+      kind: 'annotation',
+      label: `Annotation #${ann.id}`,
+      icon: '●',
+      removable: true,
+    };
+  }
+
+  private isAnnotationSelected(annotationId: number): boolean {
+    const selected = this.selectedLayer();
+    return selected?.kind === 'annotation' && selected.annotationId === annotationId;
   }
 
   private rectToBbox(start: NormPoint, end: NormPoint): BBox | null {
@@ -1649,7 +1852,6 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
     return `${bytes} B`;
   }
 
-  // lasso closure
   private tryBuildPolygonFromFreehand(points: NormPoint[]): NormPoint[] | null {
     if (points.length < 3) return null;
 

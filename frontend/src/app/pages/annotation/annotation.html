@@ -1,5 +1,4 @@
 <div class="fade-in">
-  <!-- File picker row -->
   <div style="display:flex;gap:12px;align-items:center;margin-bottom:20px;flex-wrap:wrap;">
     <div class="card" style="flex:1;min-width:260px;padding:14px 18px;display:flex;align-items:center;gap:12px;">
       <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="2">
@@ -25,6 +24,7 @@
     <button class="btn btn-secondary" type="button">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
         <rect x="2" y="2" width="20" height="20" rx="2"></rect>
+
         <line x1="8" y1="12" x2="16" y2="12"></line>
       </svg>
       Bibliothèque
@@ -32,7 +32,6 @@
   </div>
 
   <div class="grid-3">
-    <!-- Image Canvas Area (Span 2) -->
     <div class="card col-span-2" style="display:flex;flex-direction:column;">
       <div class="card-header">
         <span class="card-title">
@@ -43,13 +42,14 @@
         </span>
 
         <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
-          <button class="btn btn-sm"
-                  type="button"
-                  [class.btn-primary]="currentTool() === 'pan'"
-                  [class.btn-secondary]="currentTool() !== 'pan'"
-                  (click)="setTool('pan')"
-                  title="Hand (Pan)"
-                  aria-label="Hand (Pan)">
+          <button
+            class="btn btn-sm"
+            type="button"
+            [class.btn-primary]="currentTool() === 'pan'"
+            [class.btn-secondary]="currentTool() !== 'pan'"
+            (click)="setTool('pan')"
+            title="Hand (Pan)"
+            aria-label="Hand (Pan)">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
                  stroke-linecap="round" stroke-linejoin="round">
               <path d="M18 11V7a2 2 0 0 0-4 0v4"></path>
@@ -59,23 +59,25 @@
             </svg>
           </button>
 
-          <button class="btn btn-sm"
-                  type="button"
-                  [class.btn-primary]="currentTool() === 'rect'"
-                  [class.btn-secondary]="currentTool() !== 'rect'"
-                  (click)="setTool('rect')"
-                  title="BBox (Rectangle)">
+          <button
+            class="btn btn-sm"
+            type="button"
+            [class.btn-primary]="currentTool() === 'rect'"
+            [class.btn-secondary]="currentTool() !== 'rect'"
+            (click)="setTool('rect')"
+            title="BBox (Rectangle)">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <rect x="3" y="3" width="18" height="18" rx="2"></rect>
             </svg>
           </button>
 
-          <button class="btn btn-sm"
-                  type="button"
-                  [class.btn-primary]="currentTool() === 'polygon'"
-                  [class.btn-secondary]="currentTool() !== 'polygon'"
-                  (click)="setTool('polygon')"
-                  title="Polygon (points)">
+          <button
+            class="btn btn-sm"
+            type="button"
+            [class.btn-primary]="currentTool() === 'polygon'"
+            [class.btn-secondary]="currentTool() !== 'polygon'"
+            (click)="setTool('polygon')"
+            title="Polygon (points)">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <path d="M5 6l5-3 7 4 2 8-6 5-8-4-1-10z"></path>
               <circle cx="5" cy="6" r="1" fill="currentColor"></circle>
@@ -84,12 +86,13 @@
             </svg>
           </button>
 
-          <button class="btn btn-sm"
-                  type="button"
-                  [class.btn-primary]="currentTool() === 'freehand'"
-                  [class.btn-secondary]="currentTool() !== 'freehand'"
-                  (click)="setTool('freehand')"
-                  title="Tracé Libre (Crayon)">
+          <button
+            class="btn btn-sm"
+            type="button"
+            [class.btn-primary]="currentTool() === 'freehand'"
+            [class.btn-secondary]="currentTool() !== 'freehand'"
+            (click)="setTool('freehand')"
+            title="Tracé Libre (Crayon)">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <path d="M3 17c3-6 6-8 9-8 2.5 0 3.5 2.5 5 2.5 1.5 0 2-1.5 4-4.5"></path>
               <path d="M3 21c3-2 6-3 10-3"></path>
@@ -112,18 +115,17 @@
         </div>
       </div>
 
-      <!-- Canvas Container -->
-      <div class="viz-placeholder"
-           style="flex:1;min-height:380px;position:relative;overflow:hidden;background:#0D0E1A;"
-           [style.cursor]="cursorStyle()"
-           tabindex="0"
-           id="image-container">
+      <div
+        class="viz-placeholder"
+        style="flex:1;min-height:380px;position:relative;overflow:hidden;background:#0D0E1A;"
+        [style.cursor]="cursorStyle()"
+        tabindex="0"
+        id="image-container">
         <canvas #imageCanvas style="position:absolute;top:0;left:0;"></canvas>
         <canvas #drawCanvas style="position:absolute;top:0;left:0;"></canvas>
       </div>
     </div>
 
-    <!-- Annotation Panel -->
     <div class="card" style="display:flex;flex-direction:column;">
       <div class="card-header">
         <span class="card-title">
@@ -146,50 +148,82 @@
       <div class="form-group" style="margin-bottom:12px;">
         <label class="form-label">Sévérité du défaut</label>
         <div style="display:flex;gap:8px;flex-wrap:wrap;">
-          <button class="btn btn-sm"
-                  type="button"
-                  [class.btn-danger]="selectedSeverity() === 'Critique'"
-                  [class.btn-secondary]="selectedSeverity() !== 'Critique'"
-                  (click)="setSeverity('Critique')">Critique</button>
+          <button
+            class="btn btn-sm"
+            type="button"
+            [class.btn-danger]="selectedSeverity() === 'Critique'"
+            [class.btn-secondary]="selectedSeverity() !== 'Critique'"
+            (click)="setSeverity('Critique')">Critique</button>
 
-          <button class="btn btn-sm"
-                  type="button"
-                  [class.btn-orange]="selectedSeverity() === 'Majeur'"
-                  [class.btn-secondary]="selectedSeverity() !== 'Majeur'"
-                  (click)="setSeverity('Majeur')">Majeur</button>
+          <button
+            class="btn btn-sm"
+            type="button"
+            [class.btn-orange]="selectedSeverity() === 'Majeur'"
+            [class.btn-secondary]="selectedSeverity() !== 'Majeur'"
+            (click)="setSeverity('Majeur')">Majeur</button>
 
-          <button class="btn btn-sm"
-                  type="button"
-                  [class.btn-success]="selectedSeverity() === 'Mineur'"
-                  [class.btn-secondary]="selectedSeverity() !== 'Mineur'"
-                  (click)="setSeverity('Mineur')">Mineur</button>
+          <button
+            class="btn btn-sm"
+            type="button"
+            [class.btn-success]="selectedSeverity() === 'Mineur'"
+            [class.btn-secondary]="selectedSeverity() !== 'Mineur'"
+            (click)="setSeverity('Mineur')">Mineur</button>
         </div>
       </div>
 
       <div class="form-group" style="margin-bottom:12px;">
         <label class="form-label">Description détaillée contextuelle</label>
-        <textarea class="form-textarea"
-                  [ngModel]="annotationDesc()"
-                  (ngModelChange)="updateAnnotationDesc($event)"
-                  placeholder="Ex: Rayure longitudinale causée par un frottement outil sur l'axe X..."></textarea>
+        <textarea
+          class="form-textarea"
+          [ngModel]="annotationDesc()"
+          (ngModelChange)="updateAnnotationDesc($event)"
+          placeholder="Ex: Rayure longitudinale causée par un frottement outil sur l'axe X..."></textarea>
+      </div>
+
+      <div class="form-group" style="margin-bottom:16px;">
+        <label class="form-label">Calque courant</label>
+
+        @if (hasCurrentLayer()) {
+          <div class="current-layer-box">
+            <div class="current-layer-icon" aria-hidden="true">
+              <div class="current-layer-shape">{{ currentLayerShape() }}</div>
+            </div>
+
+            <div class="current-layer-content">
+              <div class="current-layer-title">{{ currentLayerLabel() }}</div>
+              <div class="current-layer-subtitle">{{ currentLayerKindLabel() }}</div>
+            </div>
+
+            <div class="current-layer-actions">
+              <button
+                class="btn btn-sm btn-secondary"
+                type="button"
+                (click)="clearLayerSelection()">
+                Fermer
+              </button>
+
+              <button
+                class="btn btn-sm btn-danger"
+                type="button"
+                (click)="removeCurrentLayer()">
+                🗑
+              </button>
+            </div>
+          </div>
+        } @else {
+          <div class="current-layer-box is-empty">
+            <div class="current-layer-content">
+              <div class="current-layer-title">Aucun calque sélectionné</div>
+              <div class="current-layer-subtitle">Les champs ci-dessus s’appliqueront aux prochains dessins.</div>
+            </div>
+          </div>
+        }
       </div>
 
       <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px;">
         <span class="tag tag-orange">{{ draftCount() }} draft(s)</span>
         <span class="tag tag-cyan">{{ imageAnnotations().length }} sauvegardée(s)</span>
       </div>
-
-      @if (remoteSaveSuccess()) {
-        <div class="tag tag-cyan" style="margin-bottom:12px;display:inline-flex;">
-          {{ remoteSaveSuccess() }}
-        </div>
-      }
-
-      @if (remoteSaveError()) {
-        <div class="tag tag-red" style="margin-bottom:12px;display:inline-flex;">
-          {{ remoteSaveError() }}
-        </div>
-      }
 
       <button
         class="btn btn-primary"
@@ -207,7 +241,6 @@
     </div>
   </div>
 
-  <!-- Annotation history / Objects list -->
   <div class="card" style="margin-top:16px;">
     <div class="card-header">
       <span class="card-title">
@@ -224,74 +257,71 @@
 
     <table style="width:100%;border-collapse:collapse;font-size:12px;">
       <thead>
-      <tr style="color:var(--text-muted);">
-        <th style="text-align:left;padding:8px 12px;border-bottom:1px solid var(--border);">Type de Forme</th>
-        <th style="padding:8px 12px;border-bottom:1px solid var(--border);">Classe (Défaut)</th>
-        <th style="padding:8px 12px;border-bottom:1px solid var(--border);">Sévérité</th>
-        <th style="text-align:left;padding:8px 12px;border-bottom:1px solid var(--border);">Description textuelle</th>
-        <th style="padding:8px 12px;border-bottom:1px solid var(--border);">Action</th>
-      </tr>
+        <tr style="color:var(--text-muted);">
+          <th style="text-align:left;padding:8px 12px;border-bottom:1px solid var(--border);">Type de Forme</th>
+          <th style="padding:8px 12px;border-bottom:1px solid var(--border);">Classe (Défaut)</th>
+          <th style="padding:8px 12px;border-bottom:1px solid var(--border);">Sévérité</th>
+          <th style="text-align:left;padding:8px 12px;border-bottom:1px solid var(--border);">Description textuelle</th>
+          <th style="padding:8px 12px;border-bottom:1px solid var(--border);">Action</th>
+        </tr>
       </thead>
 
       <tbody>
-      @for (ann of imageAnnotations(); track ann.id) {
-        <tr style="border-bottom:1px solid var(--border); transition:background 0.2s; cursor:pointer;"
-            [style.background]="ann.id === hoveredAnnotId() ? 'var(--bg-card-hover)' : 'transparent'"
+        @for (ann of imageAnnotations(); track ann.id) {
+          <tr
+            style="border-bottom:1px solid var(--border); transition:background 0.2s; cursor:pointer;"
+            [style.background]="isAnnotationRowHighlighted(ann.id) ? 'var(--bg-card-hover)' : 'transparent'"
             (mouseenter)="hoverAnnotation(ann.id, true)"
             (mouseleave)="hoverAnnotation(ann.id, false)">
-          <td style="padding:10px 12px;color:var(--cyan);font-family:monospace;">{{ ann.shape }}</td>
-          <td style="padding:10px 12px;text-align:center;">
-            <span style="color:var(--text-primary);font-weight:600;">{{ ann.def }}</span>
-          </td>
-          <td style="padding:10px 12px;text-align:center;">
-            <span class="tag" [ngClass]="ann.scls">{{ ann.sev }}</span>
-          </td>
-          <td style="padding:10px 12px;color:var(--text-secondary);max-width:320px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">
-            {{ ann.desc }}
-          </td>
-          <td style="padding:10px 12px;text-align:center;">
-            <button class="btn btn-sm btn-danger" type="button" (click)="deleteAnnotation(ann.id); $event.stopPropagation()">🗑</button>
-          </td>
-        </tr>
-      }
+            <td style="padding:10px 12px;color:var(--cyan);font-family:monospace;">{{ ann.shape }}</td>
+            <td style="padding:10px 12px;text-align:center;">
+              <span style="color:var(--text-primary);font-weight:600;">{{ ann.def }}</span>
+            </td>
+            <td style="padding:10px 12px;text-align:center;">
+              <span class="tag" [ngClass]="ann.scls">{{ ann.sev }}</span>
+            </td>
+            <td style="padding:10px 12px;color:var(--text-secondary);max-width:320px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">
+              {{ ann.desc }}
+            </td>
+            <td style="padding:10px 12px;text-align:center;">
+              <button
+                class="btn btn-sm btn-secondary"
+                type="button"
+                style="margin-right:4px;"
+                (click)="editAnnotation(ann.id); $event.stopPropagation()">
+                Éditer
+              </button>
+
+              <button
+                class="btn btn-sm btn-danger"
+                type="button"
+                (click)="deleteAnnotation(ann.id); $event.stopPropagation()">
+                🗑
+              </button>
+            </td>
+          </tr>
+        }
       </tbody>
     </table>
   </div>
 
-  @if (savePopup().open) {
-    <div class="vista-modal-backdrop" role="presentation" (click)="closeSavePopup()">
-      <div
-        class="vista-modal-card"
-        role="dialog"
-        aria-modal="true"
-        [attr.aria-label]="savePopup().title"
-        (click)="$event.stopPropagation()">
-        <div class="vista-modal-header">
-          <div class="vista-modal-logo" aria-hidden="true">
-            <svg width="34" height="34" viewBox="0 0 34 34" fill="none">
-              <rect x="5" y="5" width="24" height="24" rx="6" stroke="currentColor" stroke-width="2"></rect>
-              <circle cx="17" cy="17" r="6" stroke="currentColor" stroke-width="2"></circle>
-              <circle cx="25" cy="9" r="2" fill="currentColor"></circle>
-            </svg>
-          </div>
-          <div>
-            <div class="vista-modal-title">{{ savePopup().title }}</div>
-            <div
-              class="vista-modal-subtitle"
-              [class.is-error]="savePopup().kind === 'error'"
-              [class.is-success]="savePopup().kind === 'success'">
-              {{ savePopup().kind === 'error' ? 'Erreur' : 'Succès' }}
-            </div>
-          </div>
-        </div>
+  @if (saveToast().visible) {
+    <div
+      class="vista-toast"
+      [class.is-success]="saveToast().kind === 'success'"
+      [class.is-error]="saveToast().kind === 'error'"
+      role="status"
+      aria-live="polite">
+      <div class="vista-toast-icon" aria-hidden="true">
+        @if (saveToast().kind === 'success') {
+          <span>✔</span>
+        } @else {
+          <span>!</span>
+        }
+      </div>
 
-        <div class="vista-modal-body">
-          {{ savePopup().message }}
-        </div>
-
-        <div class="vista-modal-actions">
-          <button class="btn btn-primary" type="button" (click)="closeSavePopup()">Fermer</button>
-        </div>
+      <div class="vista-toast-content">
+        {{ saveToast().message }}
       </div>
     </div>
   }
