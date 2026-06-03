@@ -50,6 +50,7 @@ export default function TrainingPage(){
   const [savedPipelines,setSavedPipelines]=useState<any[]>([]);
   const [pipelineName,setPipelineName]=useState("");
   const [showLoadMenu,setShowLoadMenu]=useState(false);
+  const [progressData,setProgressData]=useState<any>(null);
   const [edges,setEdges]=useState<PEdge[]>([]);
   const [selN,setSelN]=useState<string|null>(null);
   const [conn,setConn]=useState<string|null>(null);
@@ -71,6 +72,7 @@ export default function TrainingPage(){
       try{
         const{data}=await api.get("/api/v1/training-jobs/"+job.id);
         setJob(data);setProg(data.total_epochs>0?Math.round((data.current_epoch/data.total_epochs)*100):0);
+        api.get("/api/v1/training-jobs/"+data.id+"/progress").then(({data:pd}:any)=>setProgressData(pd)).catch(()=>{});
         if(data.status==="completed"||data.status==="failed"){
           setTrn(false);if(pollRef.current)clearInterval(pollRef.current);
           api.get("/api/v1/training-jobs").then(({data})=>setJobs(data)).catch(()=>{});
@@ -350,6 +352,45 @@ export default function TrainingPage(){
                 <span style={{color:job?.status==="completed"?"var(--green)":"var(--accent)",fontWeight:600}}>{job?.status}</span>
               </div>
               <div className="progress-bar" style={{height:8}}><div className="progress-fill" style={{width:prog+"%"}}/></div>
+              {progressData && progressData.metrics && progressData.metrics.length >= 1 && (
+                <div style={{marginTop:12,background:"var(--bg-input)",borderRadius:8,padding:12,border:"1px solid var(--border)"}}>
+                  <div style={{fontSize:11,fontWeight:600,color:"var(--text2)",marginBottom:8}}>Training Metrics</div>
+                  <canvas ref={(canvas)=>{
+                    if(!canvas||!progressData?.metrics?.length)return;
+                    const ctx=canvas.getContext("2d");if(!ctx)return;
+                    const W=canvas.width=canvas.parentElement?.clientWidth||400;
+                    const H=canvas.height=120;
+                    const m=progressData.metrics;
+                    const pad={l:40,r:10,t:10,b:20};
+                    const pw=W-pad.l-pad.r,ph=H-pad.t-pad.b;
+                    ctx.fillStyle="var(--bg-input)";ctx.fillRect(0,0,W,H);
+                    // Grid
+                    ctx.strokeStyle="rgba(255,255,255,0.05)";ctx.lineWidth=1;
+                    for(let i=0;i<=4;i++){const y=pad.t+ph*i/4;ctx.beginPath();ctx.moveTo(pad.l,y);ctx.lineTo(W-pad.r,y);ctx.stroke();}
+                    // Labels
+                    ctx.fillStyle="#666";ctx.font="9px Inter";ctx.textAlign="right";
+                    for(let i=0;i<=4;i++){ctx.fillText((100-i*25)+"%",pad.l-4,pad.t+ph*i/4+3);}
+                    ctx.textAlign="center";
+                    for(let i=0;i<m.length;i+=Math.max(1,Math.floor(m.length/6))){ctx.fillText("E"+m[i].epoch,pad.l+pw*i/(m.length-1||1),H-4);}
+                    // Draw lines
+                    const drawLine=(key:string,color:string)=>{
+                      ctx.beginPath();ctx.strokeStyle=color;ctx.lineWidth=2;
+                      m.forEach((p:any,i:number)=>{
+                        const x=pad.l+pw*i/(m.length-1||1);
+                        const v=key.includes("loss")?Math.max(0,1-p[key]/3):p[key];
+                        const y=pad.t+ph*(1-v);
+                        i===0?ctx.moveTo(x,y):ctx.lineTo(x,y);
+                      });ctx.stroke();
+                    };
+                    drawLine("map50","#00C7BE");
+                    drawLine("precision","#6C63FF");
+                    drawLine("train_loss","#FF453A");
+                    // Legend
+                    const lg=[{l:"mAP",c:"#00C7BE"},{l:"Precision",c:"#6C63FF"},{l:"Loss",c:"#FF453A"}];
+                    lg.forEach((item,i)=>{ctx.fillStyle=item.c;ctx.fillRect(pad.l+i*70,0,8,8);ctx.fillStyle="#999";ctx.font="9px Inter";ctx.textAlign="left";ctx.fillText(item.l,pad.l+i*70+10,8);});
+                  }} style={{width:"100%",height:120}} />
+                </div>
+              )}
             </div>
           )}
         </div>
@@ -363,7 +404,7 @@ export default function TrainingPage(){
             </tr></thead>
             <tbody>{jobs.slice(0,20).map(j=>(
               <tr key={j.id} style={{borderBottom:"1px solid var(--border)"}}>
-                <td style={{padding:"4px 8px",fontWeight:500}}>{j.name}</td>
+                <td style={{padding:"4px 8px",fontWeight:500,cursor:"pointer",color:"var(--accent)"}} onClick={()=>{setJob(j as any);api.get("/api/v1/training-jobs/"+j.id+"/progress").then(({data}:any)=>setProgressData(data)).catch(()=>{});}}>{j.name}</td>
                 <td style={{padding:"4px 8px"}}>{j.architecture}</td>
                 <td style={{padding:"4px 8px"}}>{j.current_epoch}/{j.total_epochs}</td>
                 <td style={{padding:"4px 8px",color:"var(--green)",fontWeight:600}}>{j.best_metric?(j.best_metric*100).toFixed(1)+"%":"-"}</td>

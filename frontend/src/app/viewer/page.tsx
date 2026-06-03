@@ -17,6 +17,8 @@ export default function ViewerPage() {
   const [hoveredAnnot, setHoveredAnnot] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [uploading, setUploading] = useState(false);
+  const [galleryData, setGalleryData] = useState<any>(null);
+  const [galleryFilter, setGalleryFilter] = useState("all");
   const [zoom, setZoom] = useState(100);
   const [imgPage, setImgPage] = useState(0);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -360,15 +362,27 @@ export default function ViewerPage() {
             <button className="btn btn-sm btn-secondary" disabled={imgPage >= pages - 1} onClick={() => setImgPage(p => p + 1)}>&#9654;</button>
           </div>}
         </div>
-        <div style={{ display: "flex", gap: 6, overflowX: "auto" }}>
-          {paged.map(img => (
-            <div key={img.id} onClick={() => setSelectedImg(img)} style={{ width: 80, height: 70, borderRadius: 6, overflow: "hidden", cursor: "pointer", border: selectedImg?.id === img.id ? "2px solid var(--accent)" : "2px solid transparent", background: "var(--bg-input)", flexShrink: 0 }}>
-              <div style={{ width: "100%", height: "100%", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 8, color: "var(--text3)", textAlign: "center", padding: 4, wordBreak: "break-all", background: selectedImg?.id === img.id ? "rgba(224,108,0,0.1)" : "transparent" }}>
-                {img.filename.includes("def") ? "\uD83D\uDD34" : img.filename.includes("ok") ? "\uD83D\uDFE2" : "\uD83D\uDCF7"}<br />{img.filename.replace("cast_", "").replace(".jpeg", "")}
-              </div>
+        <div style={{ display: "flex", gap: 4, marginBottom: 8 }}>
+          {["all","annotated","unannotated"].map(f=>(
+            <button key={f} className={"btn btn-sm "+(galleryFilter===f?"btn-primary":"btn-secondary")} onClick={()=>{setGalleryFilter(f);if(selectedDs)api.get("/api/v1/gallery/"+selectedDs.id+"?per_page=50&filter="+f).then(({data}:any)=>setGalleryData(data)).catch(()=>{});}} style={{fontSize:10}}>
+              {f==="all"?"Toutes":f==="annotated"?"Annotees":"Non annotees"} {galleryData&&f==="all"?"("+galleryData.total+")":""}
+            </button>
+          ))}
+        </div>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(80px, 1fr))", gap: 6, maxHeight: 200, overflowY: "auto" }}>
+          {(galleryData?.images||paged.map((img:any)=>({id:img.id,filename:img.filename,thumbnail_url:null,is_annotated:false}))).map((img:any) => (
+            <div key={img.id} onClick={() => {const found=images.find((i:any)=>i.id===img.id);if(found)setSelectedImg(found);}} style={{ width: "100%", aspectRatio: "1", borderRadius: 6, overflow: "hidden", cursor: "pointer", border: selectedImg?.id === img.id ? "2px solid var(--accent)" : "2px solid transparent", background: "var(--bg-input)", position: "relative" }}>
+              {img.thumbnail_url ? (
+                <img src={img.thumbnail_url} alt={img.filename} style={{width:"100%",height:"100%",objectFit:"cover"}} crossOrigin="anonymous" />
+              ) : (
+                <div style={{width:"100%",height:"100%",display:"flex",alignItems:"center",justifyContent:"center",fontSize:8,color:"var(--text3)",textAlign:"center",padding:4}}>
+                  {img.filename?.replace("cast_","").replace(".jpeg","")}
+                </div>
+              )}
+              {img.is_annotated && <div style={{position:"absolute",top:2,right:2,width:8,height:8,borderRadius:"50%",background:"var(--green)"}} />}
             </div>
           ))}
-          {paged.length === 0 && <div style={{ flex: 1, minHeight: 70, display: "flex", alignItems: "center", justifyContent: "center", border: "2px dashed var(--border)", borderRadius: 8, color: "var(--text3)", fontSize: 12 }}>Aucune image</div>}
+          {(!galleryData?.images||galleryData.images.length===0)&&paged.length===0 && <div style={{ gridColumn: "1/-1", minHeight: 70, display: "flex", alignItems: "center", justifyContent: "center", border: "2px dashed var(--border)", borderRadius: 8, color: "var(--text3)", fontSize: 12 }}>Aucune image</div>}
         </div>
       </div>
 

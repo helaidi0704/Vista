@@ -21,6 +21,9 @@ const FORMATS = ["API REST (JSON)", "ONNX", "TensorRT (Edge)", "TFLite", "Docker
 
 export default function DeploymentPage() {
   const [models, setModels] = useState<MLModel[]>([]);
+  const [compareIds, setCompareIds] = useState<string[]>([]);
+  const [compareResult, setCompareResult] = useState<any>(null);
+  const [comparing, setComparing] = useState(false);
   const [selectedModel, setSelectedModel] = useState<MLModel | null>(null);
   const [modelStats, setModelStats] = useState<ModelStats | null>(null);
   const [activeFormat, setActiveFormat] = useState(0);
@@ -127,13 +130,68 @@ export default function DeploymentPage() {
   const anomalyRate = modelStats?.usage ? (modelStats.usage.anomaly_count / Math.max(modelStats.usage.total_inferences, 1) * 100) : 0;
   const apiHost = typeof window !== "undefined" ? window.location.hostname : "localhost";
 
+  async function compareModels(){
+    if(compareIds.length<2)return;
+    setComparing(true);
+    try{
+      const{data}=await api.post("/api/v1/models/compare",{model_ids:compareIds});
+      setCompareResult(data);
+    }catch(e){console.error(e);}
+    setComparing(false);
+  }
+  function toggleCompare(id:string){
+    setCompareIds(prev=>prev.includes(id)?prev.filter(x=>x!==id):[...prev,id].slice(0,5));
+  }
   return (
     <div className="fade-in">
+      {/* Compare bar */}
+      {compareIds.length > 0 && (
+        <div className="card" style={{padding:"10px 16px",marginBottom:12,display:"flex",alignItems:"center",gap:12}}>
+          <span style={{fontSize:12,fontWeight:600,color:"var(--text2)"}}>Comparaison: {compareIds.length} modeles selectionnes</span>
+          <button className="btn btn-sm btn-primary" onClick={compareModels} disabled={compareIds.length<2||comparing}>{comparing?"Comparaison...":"Comparer"}</button>
+          <button className="btn btn-sm btn-secondary" onClick={()=>{setCompareIds([]);setCompareResult(null);}}>Annuler</button>
+        </div>
+      )}
+      {compareResult && (
+        <div className="card" style={{padding:16,marginBottom:16}}>
+          <div className="card-header" style={{marginBottom:12}}>
+            <span className="card-title">Resultat de Comparaison</span>
+            {compareResult.winner && <span className="tag tag-green">Gagnant: {compareResult.winner.name}</span>}
+          </div>
+          <div style={{overflowX:"auto"}}>
+            <table style={{width:"100%",borderCollapse:"collapse",fontSize:12}}>
+              <thead><tr style={{color:"var(--text3)",borderBottom:"2px solid var(--border)"}}>
+                <th style={{textAlign:"left",padding:"8px 12px"}}>Modele</th>
+                <th style={{textAlign:"left",padding:"8px 12px"}}>Architecture</th>
+                <th style={{textAlign:"center",padding:"8px 12px"}}>mAP@50</th>
+                <th style={{textAlign:"center",padding:"8px 12px"}}>Precision</th>
+                <th style={{textAlign:"center",padding:"8px 12px"}}>Recall</th>
+                <th style={{textAlign:"center",padding:"8px 12px"}}>Latence moy.</th>
+                <th style={{textAlign:"center",padding:"8px 12px"}}>Inferences</th>
+                <th style={{textAlign:"center",padding:"8px 12px"}}>Entrainement</th>
+              </tr></thead>
+              <tbody>{compareResult.comparisons.map((c:any,i:number)=>(
+                <tr key={c.id} style={{borderBottom:"1px solid var(--border)",background:compareResult.winner?.id===c.id?"rgba(0,199,190,0.08)":"transparent"}}>
+                  <td style={{padding:"8px 12px",fontWeight:600}}>{compareResult.winner?.id===c.id?"🏆 ":""}{c.name}</td>
+                  <td style={{padding:"8px 12px"}}>{c.architecture}</td>
+                  <td style={{padding:"8px 12px",textAlign:"center",color:"var(--green)",fontWeight:700}}>{c.metrics.map50?(c.metrics.map50*100).toFixed(1)+"%":"-"}</td>
+                  <td style={{padding:"8px 12px",textAlign:"center"}}>{c.metrics.precision?(c.metrics.precision*100).toFixed(1)+"%":"-"}</td>
+                  <td style={{padding:"8px 12px",textAlign:"center"}}>{c.metrics.recall?(c.metrics.recall*100).toFixed(1)+"%":"-"}</td>
+                  <td style={{padding:"8px 12px",textAlign:"center"}}>{c.inference.avg_latency_ms}ms</td>
+                  <td style={{padding:"8px 12px",textAlign:"center"}}>{c.inference.total_runs}</td>
+                  <td style={{padding:"8px 12px",textAlign:"center"}}>{c.training?.epochs||"-"} epochs</td>
+                </tr>
+              ))}</tbody>
+            </table>
+          </div>
+        </div>
+      )}
       {/* Deployed models overview */}
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gap: 16, marginBottom: 20 }}>
         {models.map(m => (
-          <div key={m.id} className="card" style={{ cursor: "pointer", border: selectedModel?.id === m.id ? "1px solid var(--accent)" : "1px solid var(--border)" }}
+          <div key={m.id} className="card" style={{ cursor: "pointer", position: "relative", border: selectedModel?.id === m.id ? "1px solid var(--accent)" : "1px solid var(--border)" }}
             onClick={() => setSelectedModel(m)}>
+            <input type="checkbox" checked={compareIds.includes(m.id)} onChange={()=>toggleCompare(m.id)} onClick={(e:any)=>e.stopPropagation()} style={{position:"absolute",top:10,right:10,accentColor:"var(--accent)"}} />
             <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", marginBottom: 12 }}>
               <div>
                 <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 4 }}>{m.name}</div>
