@@ -13,7 +13,7 @@ echo "[$(date)] External IP: $EXTERNAL_IP"
 
 sed -i "s/EXTERNAL_IP: .*/EXTERNAL_IP: $EXTERNAL_IP/g" docker-compose.yml
 sed -i "s/EXTERNAL_IP=.*/EXTERNAL_IP=$EXTERNAL_IP/" .env
-sed -i "s|NEXT_PUBLIC_API_URL: .*|NEXT_PUBLIC_API_URL: http://$EXTERNAL_IP:8000|" docker-compose.yml
+# Domain fixed: NEXT_PUBLIC_API_URL=https://uyunvision.com (no IP override needed)
 
 # Start all services
 echo "[$(date)] Starting containers..."
