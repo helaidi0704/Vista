@@ -60,6 +60,26 @@ interface AnnotationItem extends AnnotationMeta {
   geometry: Geometry;
 }
 
+type WorkItemSource = 'draft' | 'base';
+
+interface KanbanWorkItem {
+  workId: string;
+  order: number;
+  source: WorkItemSource;
+  dirty: boolean;
+  imageId: string;
+  baseAnnotationId?: number;
+  draftId?: string;
+  geometry: Geometry;
+  meta: AnnotationMeta;
+}
+
+interface PersistedKanbanState {
+  items: KanbanWorkItem[];
+  currentWorkId: string | null;
+  nextOrder: number;
+}
+
 interface DraftShape {
   id: string;
   meta: AnnotationMeta;
@@ -85,6 +105,7 @@ interface PersistedAnnotationWorkspaceV2 {
   viewByImageId: Record<string, { zoom: number; panOffset: { x: number; y: number } }>;
   draftsByImageId: Record<string, PersistedDraftState>;
   editorByImageId: Record<string, PersistedEditorState>;
+  kanbanByImageId: Record<string, PersistedKanbanState>;
 }
 
 interface PersistedDraftState {
@@ -105,7 +126,22 @@ interface SaveAnnotationsRequestDto {
   requestId: string;
   sentAt: string;
   image: SaveImageDto;
-  annotations: SaveAnnotationDto[];
+  creates: SaveCreateAnnotationDto[];
+  updates: SaveUpdateAnnotationDto[];
+}
+
+interface SaveCreateAnnotationDto {
+  workId: string;
+  imageId: string;
+  defectLabel: string;
+  severity: SeverityUi;
+  description: string;
+  shapeLabel: string;
+  geometry: SaveGeometryDto;
+}
+
+interface SaveUpdateAnnotationDto extends SaveCreateAnnotationDto {
+  id: number;
 }
 
 interface SaveImageDto {
@@ -119,16 +155,6 @@ interface SaveImageDto {
   src?: string;
 }
 
-interface SaveAnnotationDto {
-  id: number;
-  imageId: string;
-  defectLabel: string;
-  severity: SeverityUi;
-  description: string;
-  shapeLabel: string;
-  geometry: SaveGeometryDto;
-}
-
 type SaveGeometryDto =
   | { type: 'bbox'; bbox: { nx: number; ny: number; nw: number; nh: number } }
   | { type: 'polygon'; polygon: { points: NormPoint[]; closed: true } }
@@ -137,8 +163,9 @@ type SaveGeometryDto =
 interface SaveAnnotationsResponseDto {
   success: boolean;
   requestId: string;
-  savedImageId: string;
-  savedAnnotationsCount: number;
+  createdWorkIds: string[];
+  updatedWorkIds: string[];
+  failedWorkIds: string[];
   backendMessage: string;
   receivedAt: string;
 }
@@ -165,18 +192,6 @@ interface UndoState {
   draftFreehandCurrent: { points: NormPoint[]; drawing: boolean };
 }
 
-type LayerSelection =
-  | { kind: 'draft'; draftId: string }
-  | { kind: 'annotation'; annotationId: number }
-  | null;
-
-interface ResolvedLayerSelection {
-  kind: 'draft' | 'annotation';
-  label: string;
-  icon: string;
-  removable: boolean;
-}
-
 @Component({
   selector: 'app-annotation',
   standalone: true,
@@ -197,6 +212,7 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
   private readonly STORAGE_KEY = 'vista.viewer.annotation.workspace.v2';
   private readonly SAVE_ENDPOINT = '/api/images/save-annotations';
   private readonly ENABLE_REAL_BACKEND_CALL = false;
+  private readonly MAX_VISUAL_ITEMS = 10;
 
   private readonly DEFAULT_IMAGE_ID = 'asset_carter_moteur';
   private readonly DEFAULT_IMAGE_SRC = '/assets/carter_moteur.png';
@@ -232,7 +248,8 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
     message: '',
   });
 
-  selectedLayer = signal<LayerSelection>(null);
+  kanbanItems = signal<KanbanWorkItem[]>([]);
+  currentWorkId = signal<string | null>(null);
 
   imageAnnotations = signal<AnnotationItem[]>([]);
   hoveredAnnotId = signal<number | null>(null);
@@ -254,6 +271,7 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
   private readonly CLOSE_TOL_PX = 14;
   private nextAnnotationId = 1;
   private nextDraftId = 1;
+  private nextKanbanOrder = 1;
   private lastDraftAutosaveAt = 0;
   private toastTimeoutId: ReturnType<typeof setTimeout> | null = null;
 
@@ -362,13 +380,7 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
     this.selectedSeverity.set(severity);
 
     const scls = this.severityToClass(severity);
-    const selected = this.selectedLayer();
-
-    if (selected?.kind === 'annotation') {
-      this.updateSelectedLayerMeta({ sev: severity, scls });
-    } else if (this.draftShapes.length > 0) {
-      this.updateAllDraftsMeta({ sev: severity, scls });
-    }
+    if (this.currentWorkItem()) this.updateCurrentWorkMeta({ sev: severity, scls });
 
     this.persistWorkspaceState();
   }
@@ -377,12 +389,7 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
     this.clearRemoteFeedback();
     this.annotationType.set(value);
 
-    const selected = this.selectedLayer();
-    if (selected?.kind === 'annotation') {
-      this.updateSelectedLayerMeta({ def: value });
-    } else if (this.draftShapes.length > 0) {
-      this.updateAllDraftsMeta({ def: value });
-    }
+    if (this.currentWorkItem()) this.updateCurrentWorkMeta({ def: value });
 
     this.persistWorkspaceState();
   }
@@ -391,12 +398,7 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
     this.clearRemoteFeedback();
     this.annotationDesc.set(value);
 
-    const selected = this.selectedLayer();
-    if (selected?.kind === 'annotation') {
-      this.updateSelectedLayerMeta({ desc: value });
-    } else if (this.draftShapes.length > 0) {
-      this.updateAllDraftsMeta({ desc: value });
-    }
+    if (this.currentWorkItem()) this.updateCurrentWorkMeta({ desc: value });
 
     this.persistWorkspaceState();
   }
@@ -427,82 +429,26 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
     this.drawAnnotationsOnly();
   }
 
-  isAnnotationRowHighlighted(id: number): boolean {
-    const selected = this.selectedLayer();
-    return this.hoveredAnnotId() === id || (selected?.kind === 'annotation' && selected.annotationId === id);
-  }
-
   editAnnotation(id: number): void {
     this.clearRemoteFeedback();
-    this.selectAnnotationById(id);
+    this.focusBaseAnnotation(id);
   }
 
-  deleteAnnotation(id: number): void {
+  removeCurrentKanbanItem(): void {
+    const id = this.currentWorkId();
+    if (!id) return;
     this.clearRemoteFeedback();
-    this.imageAnnotations.update((annots) => annots.filter((a) => a.id !== id));
+    this.removeKanbanItem(id);
+  }
 
-    if (this.hoveredAnnotId() === id) {
-      this.hoveredAnnotId.set(null);
-    }
-
-    const selected = this.selectedLayer();
-    if (selected?.kind === 'annotation' && selected.annotationId === id) {
-      this.selectedLayer.set(null);
-    }
-
+  clearCurrentWork(): void {
+    this.currentWorkId.set(null);
     this.persistWorkspaceState();
     this.drawAnnotationsOnly();
-  }
-
-  removeCurrentLayer(): void {
-    const selected = this.selectedLayer();
-    if (!selected) return;
-
-    this.clearRemoteFeedback();
-
-    if (selected.kind === 'draft') {
-      this.draftShapes = this.draftShapes.filter((d) => d.id !== selected.draftId);
-      this.selectedLayer.set(null);
-      this.persistWorkspaceState();
-      this.drawAnnotationsOnly();
-      return;
-    }
-
-    this.deleteAnnotation(selected.annotationId);
-    this.selectedLayer.set(null);
-    this.persistWorkspaceState();
-    this.drawAnnotationsOnly();
-  }
-
-  clearLayerSelection(): void {
-    this.selectedLayer.set(null);
-    this.persistWorkspaceState();
-    this.drawAnnotationsOnly();
-  }
-
-  hasCurrentLayer(): boolean {
-    return this.resolveSelectedLayer() !== null;
-  }
-
-  currentLayerLabel(): string {
-    const selected = this.resolveSelectedLayer();
-    if (!selected) return 'Aucun calque sélectionné';
-    return selected.label;
-  }
-
-  currentLayerKindLabel(): string {
-    const selected = this.resolveSelectedLayer();
-    if (!selected) return 'Aucun';
-    return selected.kind === 'draft' ? 'Draft' : 'Annotation';
-  }
-
-  currentLayerShape(): string {
-    const selected = this.resolveSelectedLayer();
-    return selected?.icon ?? '•';
   }
 
   draftCount(): number {
-    return this.draftShapes.length;
+    return this.kanbanItems().filter((item) => item.source === 'draft').length;
   }
 
   cursorStyle(): string {
@@ -527,6 +473,212 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
 
     this.loadImageFile(file);
     input.value = '';
+  }
+
+  private createWorkId(prefix: string): string {
+    return `${prefix}_${Date.now()}_${Math.random().toString(16).slice(2)}`;
+  }
+
+  private currentWorkItem(): KanbanWorkItem | null {
+    const id = this.currentWorkId();
+    if (!id) return null;
+    return this.kanbanItems().find((item) => item.workId === id) ?? null;
+  }
+
+  setCurrentWork(workId: string | null): void {
+    this.currentWorkId.set(workId);
+    const current = workId ? this.kanbanItems().find((item) => item.workId === workId) ?? null : null;
+
+    if (current) {
+      this.selectedSeverity.set(current.meta.sev);
+      this.annotationType.set(current.meta.def);
+      this.annotationDesc.set(current.meta.desc);
+    }
+
+    this.persistWorkspaceState();
+    this.drawAnnotationsOnly();
+  }
+
+  private canAddVisualItem(): boolean {
+    return this.kanbanItems().length < this.MAX_VISUAL_ITEMS;
+  }
+
+  private addKanbanItem(item: Omit<KanbanWorkItem, 'workId' | 'order'>): KanbanWorkItem | null {
+    const existingBase = item.source === 'base' && item.baseAnnotationId != null
+      ? this.kanbanItems().find((w) => w.source === 'base' && w.baseAnnotationId === item.baseAnnotationId)
+      : null;
+
+    if (existingBase) {
+      this.setCurrentWork(existingBase.workId);
+      return existingBase;
+    }
+
+    if (!this.canAddVisualItem()) {
+      this.showSaveToast('error', 'Limite de 10 éléments dans le visuel.');
+      return null;
+    }
+
+    const created: KanbanWorkItem = {
+      ...item,
+      workId: this.createWorkId(item.source),
+      order: this.nextKanbanOrder++,
+    };
+
+    this.kanbanItems.update((items) => [...items, created].sort((a, b) => a.order - b.order));
+    this.setCurrentWork(created.workId);
+    this.persistWorkspaceState();
+    return created;
+  }
+
+  removeKanbanItem(workId: string): void {
+    const wasCurrent = this.currentWorkId() === workId;
+    const removed = this.kanbanItems().find((item) => item.workId === workId);
+
+    this.kanbanItems.update((items) => items.filter((item) => item.workId !== workId));
+
+    if (removed?.source === 'draft' && removed.draftId) {
+      this.draftShapes = this.draftShapes.filter((draft) => draft.id !== removed.draftId);
+    }
+
+    if (wasCurrent) this.currentWorkId.set(null);
+
+    this.persistWorkspaceState();
+    this.drawAnnotationsOnly();
+  }
+
+  private updateCurrentWorkMeta(patch: Partial<Pick<AnnotationMeta, 'def' | 'sev' | 'scls' | 'desc'>>): void {
+    const currentId = this.currentWorkId();
+    if (!currentId) return;
+
+    this.kanbanItems.update((items) =>
+      items.map((item) =>
+        item.workId === currentId
+          ? {
+              ...item,
+              dirty: true,
+              meta: {
+                ...item.meta,
+                ...patch,
+              },
+            }
+          : item,
+      ),
+    );
+
+    this.persistWorkspaceState();
+    this.drawAnnotationsOnly();
+  }
+
+  private logFocusBaseAnnotation(annotationId: number): void {
+    console.log('[VISTA][VISUEL][FOCUS_BASE]', {
+      annotationId,
+      alreadyInVisual: this.kanbanItems().some((item) => item.source === 'base' && item.baseAnnotationId === annotationId),
+      visualCount: this.kanbanItems().length,
+    });
+  }
+
+  private focusBaseAnnotation(annotationId: number): void {
+    this.logFocusBaseAnnotation(annotationId);
+
+    const ann = this.imageAnnotations().find((a) => a.id === annotationId);
+    if (!ann) return;
+
+    const existing = this.kanbanItems().find((item) => item.source === 'base' && item.baseAnnotationId === annotationId);
+    if (existing) {
+      this.setCurrentWork(existing.workId);
+      return;
+    }
+
+    this.addKanbanItem({
+      source: 'base',
+      dirty: false,
+      imageId: ann.imageId,
+      baseAnnotationId: ann.id,
+      geometry: JSON.parse(JSON.stringify(ann.geometry)) as Geometry,
+      meta: {
+        def: ann.def,
+        sev: ann.sev,
+        scls: ann.scls,
+        desc: ann.desc,
+        shape: ann.shape,
+      },
+    });
+  }
+
+  isBaseRowCurrent(annotationId: number): boolean {
+    const current = this.currentWorkItem();
+    return !!current && current.source === 'base' && current.baseAnnotationId === annotationId;
+  }
+
+  isKanbanCurrent(workId: string): boolean {
+    return this.currentWorkId() === workId;
+  }
+
+  hasBaseItemsInKanban(): boolean {
+    return this.kanbanItems().some((item) => item.source === 'base');
+  }
+
+  saveButtonLabel(): string {
+    return this.hasBaseItemsInKanban() ? 'Mettre à jour' : 'Enregistrer';
+  }
+
+  kanbanBadgeLabel(item: KanbanWorkItem): string {
+    if (item.source === 'base' && item.baseAnnotationId != null) return `#${item.baseAnnotationId}`;
+    return `D${item.order}`;
+  }
+
+  kanbanSecondaryLabel(item: KanbanWorkItem): string {
+    return item.meta.def;
+  }
+
+  kanbanItemClasses(item: KanbanWorkItem): string {
+    return item.source === 'base' ? 'visual-item visual-item-base' : 'visual-item visual-item-draft';
+  }
+
+  private currentHighlightMatchesGeometry(geometry: Geometry, fallbackAnnotationId?: number): boolean {
+    const current = this.currentWorkItem();
+    if (!current) return false;
+
+    if (fallbackAnnotationId != null && current.source === 'base' && current.baseAnnotationId === fallbackAnnotationId) {
+      return true;
+    }
+
+    return this.sameGeometry(current.geometry, geometry);
+  }
+
+  private sameGeometry(a: Geometry, b: Geometry): boolean {
+    return JSON.stringify(a) === JSON.stringify(b);
+  }
+
+  deletePersistedAnnotation(id: number): void {
+    this.clearRemoteFeedback();
+    this.isSavingRemote.set(true);
+
+    this.deletePersistedAnnotationDryRun$(id).subscribe({
+      next: (response) => {
+        if (!response.success) {
+          this.handleSaveFailure('La suppression ne s’est pas faite.');
+          return;
+        }
+
+        const wasCurrent = this.currentWorkItem()?.source === 'base' && this.currentWorkItem()?.baseAnnotationId === id;
+        this.imageAnnotations.update((annots) => annots.filter((a) => a.id !== id));
+        this.kanbanItems.update((items) => items.filter((item) => item.source !== 'base' || item.baseAnnotationId !== id));
+        if (this.hoveredAnnotId() === id) this.hoveredAnnotId.set(null);
+        if (wasCurrent) this.currentWorkId.set(null);
+
+        this.showSaveToast('success', 'Annotation supprimée.');
+        this.persistWorkspaceState();
+        this.drawAnnotationsOnly();
+      },
+      error: () => {
+        this.handleSaveFailure('La suppression ne s’est pas faite.');
+        this.isSavingRemote.set(false);
+      },
+      complete: () => {
+        this.isSavingRemote.set(false);
+      },
+    });
   }
 
   @HostListener('window:keydown', ['$event'])
@@ -612,7 +764,9 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
   private resetTransientAnnotationState(): void {
     this.clearDraftsNoHistory();
     this.hoveredAnnotId.set(null);
-    this.selectedLayer.set(null);
+    this.kanbanItems.set([]);
+    this.currentWorkId.set(null);
+    this.nextKanbanOrder = 1;
 
     this.isPanning = false;
     this.panStart = { x: 0, y: 0 };
@@ -625,6 +779,7 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
   resetDrafts(): void {
     const hasAnyDraft =
       this.draftShapes.length > 0 ||
+      this.kanbanItems().some((item) => item.source === 'draft') ||
       !!this.draftRectCurrent?.dragging ||
       this.draftPolygonCurrent.points.length > 0 ||
       this.draftFreehandCurrent.drawing;
@@ -632,7 +787,8 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
     if (hasAnyDraft) this.pushHistory();
 
     this.clearDraftsNoHistory();
-    this.selectedLayer.set(null);
+    this.kanbanItems.update((items) => items.filter((item) => item.source !== 'draft'));
+    if (this.currentWorkItem()?.source === 'draft') this.currentWorkId.set(null);
     this.clearRemoteFeedback();
     this.persistWorkspaceState();
     this.drawAnnotationsOnly();
@@ -655,8 +811,10 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
       return;
     }
 
-    if (this.draftShapes.length > 0) {
-      this.commitDraftsToImageAnnotations();
+    const workItems = this.kanbanItems();
+    if (workItems.length === 0) {
+      this.handleSaveFailure('Aucun élément à enregistrer.');
+      return;
     }
 
     let dto: SaveAnnotationsRequestDto;
@@ -689,11 +847,12 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
         return;
       }
 
-      this.remoteSaveSuccess.set(`Enregistrement préparé (${response.savedAnnotationsCount} annotation(s)).`);
-      this.showSaveToast('success', 'Enregistrement réussi.');
+      this.applySaveResponse(response);
+      const remaining = this.kanbanItems().length;
+      this.remoteSaveSuccess.set(remaining === 0 ? 'Enregistrement préparé.' : 'Enregistrement partiel préparé.');
+      this.showSaveToast(remaining === 0 ? 'success' : 'error', remaining === 0 ? 'Enregistrement réussi.' : 'Enregistrement partiel : certains éléments restent dans le kanban.');
 
-      this.annotationDesc.set('');
-      this.selectedLayer.set(null);
+      this.currentWorkId.set(null);
       this.persistWorkspaceState();
       this.drawAnnotationsOnly();
     } catch (error) {
@@ -723,7 +882,12 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
         createdAt: img.createdAt,
         src: img.src,
       },
-      annotations: this.imageAnnotations().map((ann) => this.toSaveAnnotationDto(ann)),
+      creates: this.kanbanItems()
+        .filter((item) => item.source === 'draft')
+        .map((item) => this.toSaveCreateAnnotationDto(item)),
+      updates: this.kanbanItems()
+        .filter((item) => item.source === 'base' && item.dirty)
+        .map((item) => this.toSaveUpdateAnnotationDto(item)),
     };
   }
 
@@ -731,15 +895,23 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
     return `req_${Date.now()}_${Math.random().toString(16).slice(2)}`;
   }
 
-  private toSaveAnnotationDto(ann: AnnotationItem): SaveAnnotationDto {
+  private toSaveCreateAnnotationDto(item: KanbanWorkItem): SaveCreateAnnotationDto {
     return {
-      id: ann.id,
-      imageId: ann.imageId,
-      defectLabel: ann.def,
-      severity: ann.sev,
-      description: ann.desc,
-      shapeLabel: ann.shape,
-      geometry: this.toSaveGeometryDto(ann.geometry),
+      workId: item.workId,
+      imageId: item.imageId,
+      defectLabel: item.meta.def,
+      severity: item.meta.sev,
+      description: item.meta.desc,
+      shapeLabel: item.meta.shape,
+      geometry: this.toSaveGeometryDto(item.geometry),
+    };
+  }
+
+  private toSaveUpdateAnnotationDto(item: KanbanWorkItem): SaveUpdateAnnotationDto {
+    if (item.baseAnnotationId == null) throw new Error('Missing base annotation id');
+    return {
+      ...this.toSaveCreateAnnotationDto(item),
+      id: item.baseAnnotationId,
     };
   }
 
@@ -781,24 +953,26 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
     if (!dto.image?.id) errors.push('Missing image id');
     if (dto.image.id !== this.currentImage()?.id) errors.push('DTO image does not match current image');
 
-    for (const ann of dto.annotations) {
-      if (ann.imageId !== dto.image.id) errors.push(`Annotation ${ann.id}: imageId mismatch`);
+    const annotations = [...dto.creates, ...dto.updates];
+
+    for (const ann of annotations) {
+      if (ann.imageId !== dto.image.id) errors.push(`Annotation ${ann.workId}: imageId mismatch`);
 
       if (ann.geometry.type === 'bbox') {
         if (!(ann.geometry.bbox.nw > 0) || !(ann.geometry.bbox.nh > 0)) {
-          errors.push(`Annotation ${ann.id}: invalid bbox size`);
+          errors.push(`Annotation ${ann.workId}: invalid bbox size`);
         }
         continue;
       }
 
       if (ann.geometry.type === 'polygon') {
         const usefulPoints = this.countUniquePoints(ann.geometry.polygon.points);
-        if (usefulPoints < 3) errors.push(`Annotation ${ann.id}: polygon needs at least 3 useful points`);
+        if (usefulPoints < 3) errors.push(`Annotation ${ann.workId}: polygon needs at least 3 useful points`);
         continue;
       }
 
       if (ann.geometry.freehand.points.length < 2) {
-        errors.push(`Annotation ${ann.id}: freehand needs at least 2 points`);
+        errors.push(`Annotation ${ann.workId}: freehand needs at least 2 points`);
       }
     }
 
@@ -827,19 +1001,117 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
     console.log('sentAt:', dto.sentAt);
     console.log('timestamp:', receivedAt);
     console.log('imageId:', dto.image.id);
-    console.log('annotationsCount:', dto.annotations.length);
+    console.log('createsCount:', dto.creates.length);
+    console.log('updatesCount:', dto.updates.length);
     console.log('payload:', dto);
     console.groupEnd();
+
+    const createdWorkIds = dto.creates.map((item) => item.workId);
+    const updatedWorkIds = dto.updates.map((item) => item.workId);
 
     return of({
       success: true,
       requestId: dto.requestId,
-      savedImageId: dto.image.id,
-      savedAnnotationsCount: dto.annotations.length,
+      createdWorkIds,
+      updatedWorkIds,
+      failedWorkIds: [],
       backendMessage: 'Dry-run only: no external call has been made.',
       receivedAt,
     }).pipe(delay(300));
   }
+
+  private applySaveResponse(response: SaveAnnotationsResponseDto): void {
+    const items = this.kanbanItems();
+    const failed = new Set(response.failedWorkIds);
+    const cleanBaseWorkIds = items
+      .filter((item) => item.source === 'base' && !item.dirty && !failed.has(item.workId))
+      .map((item) => item.workId);
+    const succeeded = new Set([...response.createdWorkIds, ...response.updatedWorkIds, ...cleanBaseWorkIds]);
+    const successfulItems = items.filter((item) => succeeded.has(item.workId) && !failed.has(item.workId));
+
+    const createdAnnotations: AnnotationItem[] = [];
+    const updatedById = new Map<number, KanbanWorkItem>();
+
+    for (const item of successfulItems) {
+      if (item.source === 'draft') {
+        createdAnnotations.push({
+          id: this.nextAnnotationId++,
+          imageId: item.imageId,
+          ...item.meta,
+          geometry: JSON.parse(JSON.stringify(item.geometry)) as Geometry,
+        });
+      } else if (item.source === 'base' && item.baseAnnotationId != null && item.dirty) {
+        updatedById.set(item.baseAnnotationId, item);
+      }
+    }
+
+    if (createdAnnotations.length > 0 || updatedById.size > 0) {
+      this.imageAnnotations.update((annotations) => [
+        ...annotations.map((ann) => {
+          const update = updatedById.get(ann.id);
+          return update
+            ? {
+                ...ann,
+                ...update.meta,
+                geometry: JSON.parse(JSON.stringify(update.geometry)) as Geometry,
+              }
+            : ann;
+        }),
+        ...createdAnnotations,
+      ]);
+    }
+
+    this.kanbanItems.update((current) => current.filter((item) => !succeeded.has(item.workId) || failed.has(item.workId)));
+
+    const remainingDraftIds = new Set(
+      this.kanbanItems()
+        .filter((item) => item.source === 'draft' && !!item.draftId)
+        .map((item) => item.draftId as string),
+    );
+
+    this.draftShapes = this.draftShapes.filter((draft) => remainingDraftIds.has(draft.id));
+    this.syncNextAnnotationId();
+    this.currentWorkId.set(null);
+  }
+
+  private deletePersistedAnnotationDryRun$(id: number): Observable<{ success: boolean; id: number; receivedAt: string }> {
+    void this.http;
+    const receivedAt = new Date().toISOString();
+    console.groupCollapsed('[VISTA][DRY-RUN API] DELETE /api/annotations/' + id);
+    console.log('method:', 'DELETE');
+    console.log('id:', id);
+    console.log('timestamp:', receivedAt);
+    console.groupEnd();
+
+    return of({ success: true, id, receivedAt }).pipe(delay(220));
+  }
+
+  /*
+  private deletePersistedAnnotationHttp$(id: number): Observable<{ success: boolean; id: number; receivedAt: string }> {
+    return this.http.delete<{ success: boolean; id: number; receivedAt: string }>(
+      `/api/annotations/${id}`,
+      {
+        observe: 'response',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+      },
+    ).pipe(
+      timeout(10000),
+      map((response) => {
+        const body = response.body;
+        if (!body || body.success !== true || body.id !== id) {
+          throw new Error('Invalid delete response');
+        }
+        return body;
+      }),
+      catchError((error: unknown) => {
+        console.error('[VISTA][API] deletePersistedAnnotation failed', error);
+        return throwError(() => new Error('DELETE_BACKEND_FAILED'));
+      }),
+    );
+  }
+  */
 
   /*
   private saveToBackendHttp$(dto: SaveAnnotationsRequestDto): Observable<SaveAnnotationsResponseDto> {
@@ -920,37 +1192,6 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
       || this.draftFreehandCurrent.drawing;
   }
 
-  private commitDraftsToImageAnnotations(): number {
-    if (this.draftShapes.length === 0) return 0;
-
-    const selected = this.selectedLayer();
-    if (selected?.kind === 'draft') {
-      this.selectedLayer.set(null);
-    }
-
-    const imgId = this.currentImage()?.id ?? 'unknown';
-    const startId = this.nextAnnotationId;
-
-    const committed: AnnotationItem[] = this.draftShapes.map((draft, index) => ({
-      id: startId + index,
-      imageId: imgId,
-      ...draft.meta,
-      geometry: draft.geometry,
-    }));
-
-    this.nextAnnotationId += committed.length;
-    this.imageAnnotations.update((prev) => [...prev, ...committed]);
-
-    this.clearDraftsNoHistory();
-    this.undoStack = [];
-    this.redoStack = [];
-
-    this.persistWorkspaceState();
-    this.drawAnnotationsOnly();
-
-    return committed.length;
-  }
-
   private clearRemoteFeedback(): void {
     this.remoteSaveSuccess.set(null);
     this.remoteSaveError.set(null);
@@ -1001,6 +1242,30 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
     this.annotationDesc.set(state.annotationDesc ?? "Rayure profonde orientée à 45° sur la zone d'épaulement droite.");
   }
 
+  private currentKanbanState(): PersistedKanbanState {
+    return {
+      items: JSON.parse(JSON.stringify(this.kanbanItems().slice().sort((a, b) => a.order - b.order))) as KanbanWorkItem[],
+      currentWorkId: this.currentWorkId(),
+      nextOrder: this.nextKanbanOrder,
+    };
+  }
+
+  private applyKanbanState(state: PersistedKanbanState | null | undefined): void {
+    const items = (state?.items ?? []).slice().sort((a, b) => a.order - b.order);
+    this.kanbanItems.set(items);
+    this.currentWorkId.set(items.some((item) => item.workId === state?.currentWorkId) ? state?.currentWorkId ?? null : null);
+
+    const maxOrder = items.reduce((max, item) => Math.max(max, item.order), 0);
+    this.nextKanbanOrder = Math.max(state?.nextOrder ?? 1, maxOrder + 1, 1);
+
+    const current = this.currentWorkItem();
+    if (current) {
+      this.selectedSeverity.set(current.meta.sev);
+      this.annotationType.set(current.meta.def);
+      this.annotationDesc.set(current.meta.desc);
+    }
+  }
+
   private readWorkspaceState(): PersistedAnnotationWorkspaceV2 | null {
     if (!this.isBrowser) return null;
     try {
@@ -1049,6 +1314,10 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
         ...(prev?.editorByImageId ?? {}),
         [img.id]: this.currentEditorState(),
       },
+      kanbanByImageId: {
+        ...(prev?.kanbanByImageId ?? {}),
+        [img.id]: this.currentKanbanState(),
+      },
     };
 
     try {
@@ -1085,6 +1354,7 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
 
     this.applyDraftState(state.draftsByImageId?.[img.id]);
     this.applyEditorState(state.editorByImageId?.[img.id]);
+    this.applyKanbanState(state.kanbanByImageId?.[img.id]);
 
     this.syncNextAnnotationId();
     this.syncNextDraftId();
@@ -1336,12 +1606,29 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
     ctx.clearRect(0, 0, drawCanvas.width, drawCanvas.height);
     if (this.imageRenderRect.w === 0) return;
 
+    const baseWorkItems = this.kanbanItems().filter((item) => item.source === 'base');
+
     for (const ann of this.imageAnnotations()) {
-      this.drawGeometry(ctx, ann.geometry, ann.id, ann.scls, ann.def, false);
+      const workItem = baseWorkItems.find((item) => item.baseAnnotationId === ann.id);
+      this.drawGeometry(
+        ctx,
+        workItem?.geometry ?? ann.geometry,
+        ann.id,
+        workItem?.meta.scls ?? ann.scls,
+        workItem?.meta.def ?? ann.def,
+        false,
+      );
     }
 
-    for (const draft of this.draftShapes) {
-      this.drawGeometry(ctx, draft.geometry, -1, 'draft', draft.meta.def, true);
+    for (const item of this.kanbanItems().filter((workItem) => workItem.source === 'draft')) {
+      this.drawGeometry(
+        ctx,
+        item.geometry,
+        -1,
+        item.meta.scls,
+        item.meta.def,
+        true,
+      );
     }
 
     if (this.draftRectCurrent?.dragging) {
@@ -1368,8 +1655,8 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
     isDraft: boolean,
   ): void {
     const highlighted =
-      !isDraft &&
-      (this.hoveredAnnotId() === annId || this.isAnnotationSelected(annId));
+      (!isDraft && this.hoveredAnnotId() === annId) ||
+      this.currentHighlightMatchesGeometry(geometry, !isDraft && annId > 0 ? annId : undefined);
 
     const colors = this.getColors(sevClass);
 
@@ -1570,7 +1857,7 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
           this.draftShapes.push(newDraft);
           this.draftPolygonCurrent = { points: [], closed: false };
           this.polygonPreview = null;
-          this.selectDraftById(newDraft.id);
+          this.addDraftShapeToKanban(newDraft);
           this.persistWorkspaceState();
           this.drawAnnotationsOnly();
           return;
@@ -1654,7 +1941,7 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
         const geometry: Geometry = { type: 'bbox', data: bbox };
         const newDraft: DraftShape = { id: this.createDraftId('bbox'), meta, geometry };
         this.draftShapes.push(newDraft);
-        this.selectDraftById(newDraft.id);
+        this.addDraftShapeToKanban(newDraft);
       }
       this.draftRectCurrent = null;
       this.clearRemoteFeedback();
@@ -1678,7 +1965,7 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
         this.draftShapes.push(newDraft);
 
         this.draftFreehandCurrent = { points: [], drawing: false };
-        this.selectDraftById(newDraft.id);
+        this.addDraftShapeToKanban(newDraft);
         this.clearRemoteFeedback();
         this.persistWorkspaceState();
         this.drawAnnotationsOnly();
@@ -1706,102 +1993,28 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
     return id;
   }
 
+  private addDraftShapeToKanban(draft: DraftShape): void {
+    const imageId = this.currentImage()?.id ?? 'unknown';
+    const added = this.addKanbanItem({
+      source: 'draft',
+      dirty: true,
+      imageId,
+      draftId: draft.id,
+      geometry: JSON.parse(JSON.stringify(draft.geometry)) as Geometry,
+      meta: JSON.parse(JSON.stringify(draft.meta)) as AnnotationMeta,
+    });
+
+    if (!added) {
+      this.draftShapes = this.draftShapes.filter((item) => item.id !== draft.id);
+      this.persistWorkspaceState();
+      this.drawAnnotationsOnly();
+    }
+  }
+
   private severityToClass(sev: SeverityUi): AnnotationMeta['scls'] {
     return sev === 'Critique' ? 'tag-red' : sev === 'Majeur' ? 'tag-orange' : 'tag-cyan';
   }
 
-  private updateAllDraftsMeta(patch: Partial<Pick<AnnotationMeta, 'def' | 'sev' | 'scls' | 'desc'>>): void {
-    if (this.draftShapes.length === 0) return;
-
-    this.draftShapes = this.draftShapes.map((draft) => ({
-      ...draft,
-      meta: {
-        ...draft.meta,
-        ...patch,
-      },
-    }));
-
-    this.persistWorkspaceState();
-    this.drawAnnotationsOnly();
-  }
-
-  private updateSelectedLayerMeta(patch: Partial<Pick<AnnotationMeta, 'def' | 'sev' | 'scls' | 'desc'>>): void {
-    const selected = this.selectedLayer();
-    if (!selected || selected.kind !== 'annotation') return;
-
-    const ann = this.imageAnnotations().find((a) => a.id === selected.annotationId);
-    if (!ann) return;
-
-    this.imageAnnotations.update((annots) =>
-      annots.map((item) =>
-        item.id === selected.annotationId
-          ? {
-              ...item,
-              ...patch,
-            }
-          : item,
-      ),
-    );
-
-    this.persistWorkspaceState();
-    this.drawAnnotationsOnly();
-  }
-
-  private selectDraftById(draftId: string): void {
-    const draft = this.draftShapes.find((d) => d.id === draftId);
-    if (!draft) return;
-
-    this.selectedLayer.set({ kind: 'draft', draftId });
-    this.selectedSeverity.set(draft.meta.sev);
-    this.annotationType.set(draft.meta.def);
-    this.annotationDesc.set(draft.meta.desc);
-    this.persistWorkspaceState();
-    this.drawAnnotationsOnly();
-  }
-
-  private selectAnnotationById(annotationId: number): void {
-    const ann = this.imageAnnotations().find((a) => a.id === annotationId);
-    if (!ann) return;
-
-    this.selectedLayer.set({ kind: 'annotation', annotationId });
-    this.selectedSeverity.set(ann.sev);
-    this.annotationType.set(ann.def);
-    this.annotationDesc.set(ann.desc);
-    this.persistWorkspaceState();
-    this.drawAnnotationsOnly();
-  }
-
-  private resolveSelectedLayer(): ResolvedLayerSelection | null {
-    const selected = this.selectedLayer();
-    if (!selected) return null;
-
-    if (selected.kind === 'draft') {
-      const draft = this.draftShapes.find((d) => d.id === selected.draftId);
-      if (!draft) return null;
-
-      return {
-        kind: 'draft',
-        label: `Draft ${draft.id}`,
-        icon: '✎',
-        removable: true,
-      };
-    }
-
-    const ann = this.imageAnnotations().find((a) => a.id === selected.annotationId);
-    if (!ann) return null;
-
-    return {
-      kind: 'annotation',
-      label: `Annotation #${ann.id}`,
-      icon: '●',
-      removable: true,
-    };
-  }
-
-  private isAnnotationSelected(annotationId: number): boolean {
-    const selected = this.selectedLayer();
-    return selected?.kind === 'annotation' && selected.annotationId === annotationId;
-  }
 
   private rectToBbox(start: NormPoint, end: NormPoint): BBox | null {
     const x1 = Math.min(start.nx, end.nx);

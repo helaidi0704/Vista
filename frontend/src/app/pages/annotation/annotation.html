@@ -181,43 +181,45 @@
       </div>
 
       <div class="form-group" style="margin-bottom:16px;">
-        <label class="form-label">Calque courant</label>
+        <label class="form-label">Visuel</label>
 
-        @if (hasCurrentLayer()) {
-          <div class="current-layer-box">
-            <div class="current-layer-icon" aria-hidden="true">
-              <div class="current-layer-shape">{{ currentLayerShape() }}</div>
-            </div>
+        <div class="visual-board">
+          @if (kanbanItems().length > 0) {
+            <div class="visual-grid">
+              @for (item of kanbanItems(); track item.workId) {
+                <button
+                  type="button"
+                  [ngClass]="kanbanItemClasses(item)"
+                  [class.is-current]="isKanbanCurrent(item.workId)"
+                  (click)="setCurrentWork(item.workId)">
+                  <span class="visual-item-top">
+                    <span class="visual-item-badge">{{ kanbanBadgeLabel(item) }}</span>
 
-            <div class="current-layer-content">
-              <div class="current-layer-title">{{ currentLayerLabel() }}</div>
-              <div class="current-layer-subtitle">{{ currentLayerKindLabel() }}</div>
-            </div>
+                    <span class="visual-item-icons">
+                      @if (item.source === 'base') {
+                        <span title="Base">🗄</span>
+                      }
+                      @if (item.source === 'draft' || item.dirty) {
+                        <span title="Brouillon">✎</span>
+                      }
+                    </span>
 
-            <div class="current-layer-actions">
-              <button
-                class="btn btn-sm btn-secondary"
-                type="button"
-                (click)="clearLayerSelection()">
-                Fermer
-              </button>
+                    <span
+                      class="visual-item-remove"
+                      role="button"
+                      tabindex="0"
+                      aria-label="Retirer du visuel"
+                      (click)="removeKanbanItem(item.workId); $event.stopPropagation()">×</span>
+                  </span>
 
-              <button
-                class="btn btn-sm btn-danger"
-                type="button"
-                (click)="removeCurrentLayer()">
-                🗑
-              </button>
+                  <span class="visual-item-label">{{ kanbanSecondaryLabel(item) }}</span>
+                </button>
+              }
             </div>
-          </div>
-        } @else {
-          <div class="current-layer-box is-empty">
-            <div class="current-layer-content">
-              <div class="current-layer-title">Aucun calque sélectionné</div>
-              <div class="current-layer-subtitle">Les champs ci-dessus s’appliqueront aux prochains dessins.</div>
-            </div>
-          </div>
-        }
+          } @else {
+            <div class="visual-empty">Aucun élément dans le visuel.</div>
+          }
+        </div>
       </div>
 
       <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px;">
@@ -236,7 +238,7 @@
           <polyline points="17 21 17 13 7 13 7 21"></polyline>
           <polyline points="7 3 7 8 15 8"></polyline>
         </svg>
-        {{ isSavingRemote() ? 'Envoi...' : 'Enregistrer en base' }}
+        {{ isSavingRemote() ? 'Envoi...' : saveButtonLabel() }}
       </button>
     </div>
   </div>
@@ -270,9 +272,10 @@
         @for (ann of imageAnnotations(); track ann.id) {
           <tr
             style="border-bottom:1px solid var(--border); transition:background 0.2s; cursor:pointer;"
-            [style.background]="isAnnotationRowHighlighted(ann.id) ? 'var(--bg-card-hover)' : 'transparent'"
+            [style.background]="isBaseRowCurrent(ann.id) || hoveredAnnotId() === ann.id ? 'var(--bg-card-hover)' : 'transparent'"
             (mouseenter)="hoverAnnotation(ann.id, true)"
-            (mouseleave)="hoverAnnotation(ann.id, false)">
+            (mouseleave)="hoverAnnotation(ann.id, false)"
+            (click)="editAnnotation(ann.id)">
             <td style="padding:10px 12px;color:var(--cyan);font-family:monospace;">{{ ann.shape }}</td>
             <td style="padding:10px 12px;text-align:center;">
               <span style="color:var(--text-primary);font-weight:600;">{{ ann.def }}</span>
@@ -295,7 +298,7 @@
               <button
                 class="btn btn-sm btn-danger"
                 type="button"
-                (click)="deleteAnnotation(ann.id); $event.stopPropagation()">
+                (click)="deletePersistedAnnotation(ann.id); $event.stopPropagation()">
                 🗑
               </button>
             </td>
