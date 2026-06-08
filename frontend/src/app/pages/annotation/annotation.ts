@@ -97,9 +97,10 @@ interface ImageModel {
   createdAt: string;
 }
 
-interface PersistedAnnotationWorkspaceV2 {
-  version: 2;
-  currentImageId: string;
+interface PersistedAnnotationWorkspaceV3 {
+  version: 3;
+  currentImageId: string | null;
+  imageOrderIds: string[];
   images: Record<string, ImageModel>;
   annotationsByImageId: Record<string, AnnotationItem[]>;
   viewByImageId: Record<string, { zoom: number; panOffset: { x: number; y: number } }>;
@@ -184,6 +185,24 @@ interface SaveToastState {
   message: string;
 }
 
+type ImageCardStatus = 'pending' | 'draft' | 'ready';
+
+interface RegisterImageResponseDto {
+  success: boolean;
+  requestId: string;
+  savedImage: ImageModel;
+  backendMessage: string;
+  receivedAt: string;
+}
+
+interface DeleteImageResponseDto {
+  success: boolean;
+  requestId: string;
+  deletedImageId: string;
+  backendMessage: string;
+  receivedAt: string;
+}
+
 interface UndoState {
   draftShapes: DraftShape[];
   draftRectCurrent: { start: NormPoint; end: NormPoint; dragging: boolean } | null;
@@ -201,15 +220,15 @@ interface UndoState {
   changeDetection: ChangeDetectionStrategy.OnPush,
 })
 export class AnnotationComponent implements AfterViewInit, OnDestroy {
-  @ViewChild('imageCanvas', { static: true }) imageCanvas!: ElementRef<HTMLCanvasElement>;
-  @ViewChild('drawCanvas', { static: true }) drawCanvas!: ElementRef<HTMLCanvasElement>;
+  @ViewChild('imageCanvas') imageCanvas?: ElementRef<HTMLCanvasElement>;
+  @ViewChild('drawCanvas') drawCanvas?: ElementRef<HTMLCanvasElement>;
   @ViewChild('fileInput', { static: true }) fileInput!: ElementRef<HTMLInputElement>;
 
   private readonly platformId = inject(PLATFORM_ID);
   private readonly http = inject(HttpClient);
   private readonly isBrowser = isPlatformBrowser(this.platformId);
 
-  private readonly STORAGE_KEY = 'vista.viewer.annotation.workspace.v2';
+  private readonly STORAGE_KEY = 'vista.viewer.annotation.workspace.v3';
   private readonly SAVE_ENDPOINT = '/api/images/save-annotations';
   private readonly ENABLE_REAL_BACKEND_CALL = false;
   private readonly MAX_VISUAL_ITEMS = 10;
@@ -237,6 +256,7 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
   imageFileMeta = signal('RGB · 1920x1080 · 2.4 MB');
 
   currentImage = signal<ImageModel | null>(null);
+  imageList = signal<ImageModel[]>([]);
 
   isSavingRemote = signal(false);
   remoteSaveSuccess = signal<string | null>(null);
@@ -332,7 +352,12 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
 
       if (this.isBrowser && this.restoreWorkspaceFromStorage()) {
         const img = this.currentImage();
-        if (img) this.loadImageFromSrc(img.src, true);
+        if (img) {
+          this.loadImageFromSrc(img.src, true);
+        } else {
+          this.drawBaseImage();
+          this.drawAnnotationsOnly();
+        }
       } else {
         this.setDefaultImageAndSeed();
         this.persistWorkspaceState();
@@ -452,6 +477,7 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
   }
 
   cursorStyle(): string {
+    if (!this.currentImage()) return 'default';
     if (this.currentTool() === 'pan') return this.isPanning ? 'grabbing' : 'grab';
     switch (this.currentTool()) {
       case 'rect':
@@ -471,9 +497,361 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
     const file = input.files?.[0];
     if (!file) return;
 
-    this.loadImageFile(file);
+    const reader = new FileReader();
+    reader.onload = () => {
+      if (typeof reader.result !== 'string') return;
+      const src = reader.result;
+
+      const imgEl = new Image();
+      imgEl.onload = () => {
+        this.registerImageCandidate(file, src, imgEl.width, imgEl.height);
+      };
+      imgEl.onerror = () => {
+        this.handleSaveFailure("L'ajout de l'image ne s'est pas fait.");
+      };
+      imgEl.src = src;
+    };
+    reader.readAsDataURL(file);
+
     input.value = '';
   }
+
+  hasCurrentImage(): boolean {
+    return this.currentImage() !== null;
+  }
+
+  allImages(): ImageModel[] {
+    return this.imageList();
+  }
+
+  isCurrentImageCard(imageId: string): boolean {
+    return this.currentImage()?.id === imageId;
+  }
+
+  private imageBaseCount(imageId: string): number {
+    const state = this.readWorkspaceState();
+    return state?.annotationsByImageId?.[imageId]?.length ?? (this.currentImage()?.id === imageId ? this.imageAnnotations().length : 0);
+  }
+
+  private imageDraftCount(imageId: string): number {
+    const state = this.readWorkspaceState();
+    const persisted = state?.draftsByImageId?.[imageId];
+    if (persisted) {
+      const hasPartial =
+        !!persisted.draftRectCurrent?.dragging ||
+        (persisted.draftPolygonCurrent?.points?.length ?? 0) > 0 ||
+        persisted.draftFreehandCurrent?.drawing;
+      return (persisted.draftShapes?.length ?? 0) + (hasPartial ? 1 : 0);
+    }
+
+    if (this.currentImage()?.id === imageId) {
+      return this.draftShapes.length + (this.hasInProgressShape() ? 1 : 0);
+    }
+
+    return 0;
+  }
+
+  imageCardStatus(imageId: string): ImageCardStatus {
+    const baseCount = this.imageBaseCount(imageId);
+    const draftCount = this.imageDraftCount(imageId);
+
+    if (draftCount > 0) return 'draft';
+    if (baseCount > 0) return 'ready';
+    return 'pending';
+  }
+
+  imageCardClasses(image: ImageModel): string {
+    return this.imageCardStatus(image.id) === 'draft'
+      ? 'image-kanban-card image-kanban-card-draft'
+      : this.imageCardStatus(image.id) === 'ready'
+        ? 'image-kanban-card image-kanban-card-ready'
+        : 'image-kanban-card image-kanban-card-pending';
+  }
+
+  imageCardIcon(imageId: string): string {
+    const status = this.imageCardStatus(imageId);
+    if (status === 'draft') return '✎';
+    if (status === 'ready') return '✔';
+    return '⏳';
+  }
+
+  imageCardCounts(imageId: string): string {
+    return `B:${this.imageBaseCount(imageId)} · D:${this.imageDraftCount(imageId)}`;
+  }
+
+  imageCardName(image: ImageModel): string {
+    return image.name;
+  }
+
+  private syncImageListFromWorkspace(state: PersistedAnnotationWorkspaceV3 | null): void {
+    if (!state) {
+      this.imageList.set([]);
+      return;
+    }
+
+    const ordered = (state.imageOrderIds ?? [])
+      .map((id) => state.images[id])
+      .filter((img): img is ImageModel => !!img);
+
+    this.imageList.set(ordered);
+  }
+
+  private clearCurrentImageContextOnly(): void {
+    this.currentImage.set(null);
+    this.imageAnnotations.set([]);
+    this.clearDraftsNoHistory();
+    this.kanbanItems.set([]);
+    this.currentWorkId.set(null);
+    this.hoveredAnnotId.set(null);
+    this.zoom.set(100);
+    this.panOffset.set({ x: 0, y: 0 });
+    this.loadedImageObj = null;
+    this.imageRenderRect = { x: 0, y: 0, w: 0, h: 0 };
+    this.selectedSeverity.set('Mineur');
+    this.annotationType.set('Rayure profonde');
+    this.annotationDesc.set('');
+    this.imageFileName.set('Aucune image sélectionnée');
+    this.imageFileMeta.set('—');
+    this.undoStack = [];
+    this.redoStack = [];
+    this.drawBaseImage();
+    this.drawAnnotationsOnly();
+  }
+
+  selectImageById(imageId: string): void {
+    this.clearRemoteFeedback();
+    this.persistWorkspaceState();
+
+    const state = this.readWorkspaceState();
+    if (!state) return;
+
+    const img = state.images?.[imageId];
+    if (!img) return;
+
+    this.currentImage.set(img);
+    this.imageAnnotations.set((state.annotationsByImageId?.[img.id] ?? []).map((a) => ({ ...a, imageId: a.imageId ?? img.id })));
+    this.zoom.set(state.viewByImageId?.[img.id]?.zoom ?? 100);
+    this.panOffset.set(state.viewByImageId?.[img.id]?.panOffset ?? { x: 0, y: 0 });
+    this.applyDraftState(state.draftsByImageId?.[img.id]);
+    this.applyEditorState(state.editorByImageId?.[img.id]);
+    this.applyKanbanState(state.kanbanByImageId?.[img.id]);
+    this.syncNextAnnotationId();
+    this.syncNextDraftId();
+    this.imageFileName.set(img.name);
+    this.imageFileMeta.set(`${img.format} · ${img.width}x${img.height}${img.size != null ? ` · ${this.formatBytes(img.size)}` : ''}`);
+    this.persistWorkspaceState();
+    this.loadImageFromSrc(img.src, true);
+  }
+
+  private appendImageAndSelect(image: ImageModel): void {
+    this.imageList.update((list) => [...list, image]);
+    this.selectImageById(image.id);
+  }
+
+  requestDeleteImage(imageId: string, event?: Event): void {
+    event?.stopPropagation();
+    const target = this.imageList().find((img) => img.id === imageId);
+    if (!target) return;
+
+    const confirmed = window.confirm(`Supprimer définitivement l'image "${target.name}" et toutes ses annotations associées ?`);
+    if (!confirmed) return;
+
+    this.deleteImage(imageId);
+  }
+
+  private deleteImage(imageId: string): void {
+    this.clearRemoteFeedback();
+    this.isSavingRemote.set(true);
+
+    this.deleteImageDryRun$(imageId).subscribe({
+      next: (response) => {
+        if (!response.success) {
+          this.handleSaveFailure("La suppression de l'image ne s'est pas faite.");
+          return;
+        }
+
+        const deletingCurrent = this.currentImage()?.id === imageId;
+
+        this.imageList.update((list) => list.filter((img) => img.id !== imageId));
+
+        const prev = this.readWorkspaceState();
+        const remainingIds = new Set(this.imageList().map((img) => img.id));
+
+        const nextState: PersistedAnnotationWorkspaceV3 = {
+          version: 3,
+          currentImageId: deletingCurrent ? null : (prev?.currentImageId ?? this.currentImage()?.id ?? null),
+          imageOrderIds: this.imageList().map((img) => img.id),
+          images: {},
+          annotationsByImageId: {},
+          viewByImageId: {},
+          draftsByImageId: {},
+          editorByImageId: {},
+          kanbanByImageId: {},
+        };
+
+        for (const id of remainingIds) {
+          if (prev?.images?.[id]) nextState.images[id] = prev.images[id];
+          if (prev?.annotationsByImageId?.[id]) nextState.annotationsByImageId[id] = prev.annotationsByImageId[id];
+          if (prev?.viewByImageId?.[id]) nextState.viewByImageId[id] = prev.viewByImageId[id];
+          if (prev?.draftsByImageId?.[id]) nextState.draftsByImageId[id] = prev.draftsByImageId[id];
+          if (prev?.editorByImageId?.[id]) nextState.editorByImageId[id] = prev.editorByImageId[id];
+          if (prev?.kanbanByImageId?.[id]) nextState.kanbanByImageId[id] = prev.kanbanByImageId[id];
+        }
+
+        try {
+          localStorage.setItem(this.STORAGE_KEY, JSON.stringify(nextState));
+        } catch {
+          // ignore
+        }
+
+        if (deletingCurrent) {
+          this.clearCurrentImageContextOnly();
+        } else {
+          this.persistWorkspaceState();
+        }
+
+        this.showSaveToast('success', 'Image supprimée.');
+      },
+      error: () => {
+        this.handleSaveFailure("La suppression de l'image ne s'est pas faite.");
+        this.isSavingRemote.set(false);
+      },
+      complete: () => {
+        this.isSavingRemote.set(false);
+      },
+    });
+  }
+
+  private registerImageCandidate(file: File, src: string, width: number, height: number): void {
+    const candidate: ImageModel = {
+      id: this.newImageId('upload'),
+      name: file.name,
+      src,
+      format: this.fileTypeLabel(file.type),
+      size: file.size,
+      width,
+      height,
+      createdAt: new Date().toISOString(),
+    };
+
+    this.isSavingRemote.set(true);
+    this.clearRemoteFeedback();
+
+    this.registerImageDryRun$(candidate).subscribe({
+      next: (response) => {
+        if (!response.success) {
+          this.handleSaveFailure("L'ajout de l'image ne s'est pas fait.");
+          return;
+        }
+
+        this.appendImageAndSelect(response.savedImage);
+        this.showSaveToast('success', 'Image ajoutée.');
+      },
+      error: () => {
+        this.handleSaveFailure("L'ajout de l'image ne s'est pas fait.");
+        this.isSavingRemote.set(false);
+      },
+      complete: () => {
+        this.isSavingRemote.set(false);
+      },
+    });
+  }
+
+  private registerImageDryRun$(image: ImageModel): Observable<RegisterImageResponseDto> {
+    void this.http;
+
+    const requestId = this.createRequestId();
+    const receivedAt = new Date().toISOString();
+
+    console.groupCollapsed('[VISTA][DRY-RUN API] POST /api/images');
+    console.log('method:', 'POST');
+    console.log('requestId:', requestId);
+    console.log('imageId:', image.id);
+    console.log('payload:', image);
+    console.groupEnd();
+
+    return of({
+      success: true,
+      requestId,
+      savedImage: image,
+      backendMessage: 'Dry-run image registration only.',
+      receivedAt,
+    }).pipe(delay(250));
+  }
+
+  private deleteImageDryRun$(imageId: string): Observable<DeleteImageResponseDto> {
+    void this.http;
+
+    const requestId = this.createRequestId();
+    const receivedAt = new Date().toISOString();
+
+    console.groupCollapsed('[VISTA][DRY-RUN API] DELETE /api/images/' + imageId);
+    console.log('method:', 'DELETE');
+    console.log('requestId:', requestId);
+    console.log('imageId:', imageId);
+    console.groupEnd();
+
+    return of({
+      success: true,
+      requestId,
+      deletedImageId: imageId,
+      backendMessage: 'Dry-run image deletion only.',
+      receivedAt,
+    }).pipe(delay(250));
+  }
+
+  /*
+  private registerImageHttp$(image: ImageModel): Observable<RegisterImageResponseDto> {
+    return this.http.post<RegisterImageResponseDto>(
+      '/api/images',
+      image,
+      {
+        observe: 'response',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+      },
+    ).pipe(
+      timeout(10000),
+      map((response) => {
+        const body = response.body;
+        if (!body || body.success !== true || !body.savedImage?.id) {
+          throw new Error('Invalid image register response');
+        }
+        return body;
+      }),
+      catchError((error: unknown) => {
+        console.error('[VISTA][API] registerImage failed', error);
+        return throwError(() => new Error('REGISTER_IMAGE_BACKEND_FAILED'));
+      }),
+    );
+  }
+
+  private deleteImageHttp$(imageId: string): Observable<DeleteImageResponseDto> {
+    return this.http.delete<DeleteImageResponseDto>(
+      `/api/images/${imageId}`,
+      {
+        observe: 'response',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+      },
+    ).pipe(
+      timeout(10000),
+      map((response) => {
+        const body = response.body;
+        if (!body || body.success !== true || body.deletedImageId !== imageId) {
+          throw new Error('Invalid image delete response');
+        }
+        return body;
+      }),
+      catchError((error: unknown) => {
+        console.error('[VISTA][API] deleteImage failed', error);
+        return throwError(() => new Error('DELETE_IMAGE_BACKEND_FAILED'));
+      }),
+    );
+  }
+  */
 
   private createWorkId(prefix: string): string {
     return `${prefix}_${Date.now()}_${Math.random().toString(16).slice(2)}`;
@@ -1266,16 +1644,18 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
     }
   }
 
-  private readWorkspaceState(): PersistedAnnotationWorkspaceV2 | null {
+  private readWorkspaceState(): PersistedAnnotationWorkspaceV3 | null {
     if (!this.isBrowser) return null;
     try {
       const raw = localStorage.getItem(this.STORAGE_KEY);
       if (!raw) return null;
-      const parsed = JSON.parse(raw) as Partial<PersistedAnnotationWorkspaceV2>;
-      if (parsed.version !== 2) return null;
-      if (typeof parsed.currentImageId !== 'string') return null;
-      if (!parsed.images || !parsed.annotationsByImageId || !parsed.viewByImageId || !parsed.draftsByImageId) return null;
-      return parsed as PersistedAnnotationWorkspaceV2;
+      const parsed = JSON.parse(raw) as Partial<PersistedAnnotationWorkspaceV3>;
+      if (parsed.version !== 3) return null;
+      if (!Array.isArray(parsed.imageOrderIds)) return null;
+      if (!parsed.images || !parsed.annotationsByImageId || !parsed.viewByImageId || !parsed.draftsByImageId || !parsed.editorByImageId || !parsed.kanbanByImageId) {
+        return null;
+      }
+      return parsed as PersistedAnnotationWorkspaceV3;
     } catch {
       return null;
     }
@@ -1283,41 +1663,50 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
 
   private persistWorkspaceState(): void {
     if (!this.isBrowser) return;
-    const img = this.currentImage();
-    if (!img) return;
-
     const prev = this.readWorkspaceState();
 
-    const state: PersistedAnnotationWorkspaceV2 = {
-      version: 2,
-      currentImageId: img.id,
-      images: {
-        ...(prev?.images ?? {}),
-        [img.id]: img,
-      },
-      annotationsByImageId: {
-        ...(prev?.annotationsByImageId ?? {}),
-        [img.id]: this.imageAnnotations(),
-      },
-      viewByImageId: {
-        ...(prev?.viewByImageId ?? {}),
-        [img.id]: {
-          zoom: this.zoom(),
-          panOffset: this.panOffset(),
-        },
-      },
-      draftsByImageId: {
-        ...(prev?.draftsByImageId ?? {}),
-        [img.id]: this.currentDraftState(),
-      },
-      editorByImageId: {
-        ...(prev?.editorByImageId ?? {}),
-        [img.id]: this.currentEditorState(),
-      },
-      kanbanByImageId: {
-        ...(prev?.kanbanByImageId ?? {}),
-        [img.id]: this.currentKanbanState(),
-      },
+    const current = this.currentImage();
+    const list = this.imageList();
+    const imageIds = new Set(list.map((img) => img.id));
+
+    const images: Record<string, ImageModel> = {};
+    const annotationsByImageId: Record<string, AnnotationItem[]> = {};
+    const viewByImageId: Record<string, { zoom: number; panOffset: { x: number; y: number } }> = {};
+    const draftsByImageId: Record<string, PersistedDraftState> = {};
+    const editorByImageId: Record<string, PersistedEditorState> = {};
+    const kanbanByImageId: Record<string, PersistedKanbanState> = {};
+
+    for (const img of list) {
+      images[img.id] = img;
+      annotationsByImageId[img.id] = prev?.annotationsByImageId?.[img.id] ?? [];
+      viewByImageId[img.id] = prev?.viewByImageId?.[img.id] ?? { zoom: 100, panOffset: { x: 0, y: 0 } };
+      draftsByImageId[img.id] = prev?.draftsByImageId?.[img.id] ?? this.emptyDraftState();
+      editorByImageId[img.id] = prev?.editorByImageId?.[img.id] ?? this.currentEditorState();
+      kanbanByImageId[img.id] = prev?.kanbanByImageId?.[img.id] ?? { items: [], currentWorkId: null, nextOrder: 1 };
+    }
+
+    if (current && imageIds.has(current.id)) {
+      images[current.id] = current;
+      annotationsByImageId[current.id] = this.imageAnnotations();
+      viewByImageId[current.id] = {
+        zoom: this.zoom(),
+        panOffset: this.panOffset(),
+      };
+      draftsByImageId[current.id] = this.currentDraftState();
+      editorByImageId[current.id] = this.currentEditorState();
+      kanbanByImageId[current.id] = this.currentKanbanState();
+    }
+
+    const state: PersistedAnnotationWorkspaceV3 = {
+      version: 3,
+      currentImageId: current?.id ?? null,
+      imageOrderIds: list.map((img) => img.id),
+      images,
+      annotationsByImageId,
+      viewByImageId,
+      draftsByImageId,
+      editorByImageId,
+      kanbanByImageId,
     };
 
     try {
@@ -1340,10 +1729,19 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
     const state = this.readWorkspaceState();
     if (!state) return false;
 
-    const img = state.images[state.currentImageId];
-    if (!img) return false;
-
     this.resetTransientAnnotationState();
+    this.syncImageListFromWorkspace(state);
+
+    if (!state.currentImageId) {
+      this.clearCurrentImageContextOnly();
+      return this.imageList().length > 0;
+    }
+
+    const img = state.images[state.currentImageId];
+    if (!img) {
+      this.clearCurrentImageContextOnly();
+      return this.imageList().length > 0;
+    }
 
     this.currentImage.set(img);
     this.zoom.set(state.viewByImageId?.[img.id]?.zoom ?? 100);
@@ -1360,7 +1758,7 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
     this.syncNextDraftId();
 
     this.imageFileName.set(img.name);
-    this.imageFileMeta.set(`${img.format} · ${img.width}x${img.height}`);
+    this.imageFileMeta.set(`${img.format} · ${img.width}x${img.height}${img.size != null ? ` · ${this.formatBytes(img.size)}` : ''}`);
 
     return true;
   }
@@ -1380,6 +1778,7 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
       createdAt: new Date().toISOString(),
     };
 
+    this.imageList.set([img]);
     this.currentImage.set(img);
     this.imageFileName.set(img.name);
     this.imageFileMeta.set('PNG · —');
@@ -1442,41 +1841,6 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
     return `${prefix}_${Date.now()}_${Math.random().toString(16).slice(2)}`;
   }
 
-  private loadImageFile(file: File): void {
-    const reader = new FileReader();
-    reader.onload = () => {
-      if (typeof reader.result !== 'string') return;
-      const src = reader.result;
-
-      this.resetTransientAnnotationState();
-      this.clearRemoteFeedback();
-
-      const img: ImageModel = {
-        id: this.newImageId('upload'),
-        name: file.name,
-        src,
-        format: this.fileTypeLabel(file.type),
-        size: file.size,
-        width: 0,
-        height: 0,
-        createdAt: new Date().toISOString(),
-      };
-
-      this.currentImage.set(img);
-      this.imageAnnotations.set([]);
-      this.syncNextAnnotationId();
-
-      this.zoom.set(100);
-      this.panOffset.set({ x: 0, y: 0 });
-
-      this.imageFileName.set(img.name);
-      this.imageFileMeta.set(`${img.format} · — · ${this.formatBytes(file.size)}`);
-
-      this.persistWorkspaceState();
-      this.loadImageFromSrc(src, true);
-    };
-    reader.readAsDataURL(file);
-  }
 
   private loadImageFromSrc(src: string, updateMeta: boolean): void {
     const imgEl = new Image();
@@ -1499,6 +1863,7 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
         this.persistWorkspaceState();
       }
 
+      this.setupDrawingInteraction();
       this.drawBaseImage();
       this.drawAnnotationsOnly();
     };
@@ -1521,11 +1886,17 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
   }
 
   private drawBaseImage(): void {
+    if (!this.isBrowser) return;
+
     const container = document.getElementById('image-container');
     if (!container) return;
 
-    const imgCanvas = this.imageCanvas.nativeElement;
-    const drawCanvas = this.drawCanvas.nativeElement;
+    const imgCanvas = this.imageCanvas?.nativeElement;
+    const drawCanvas = this.drawCanvas?.nativeElement;
+    if (!imgCanvas || !drawCanvas) {
+      this.imageRenderRect = { x: 0, y: 0, w: 0, h: 0 };
+      return;
+    }
 
     const width = container.clientWidth || 1;
     const height = container.clientHeight || 1;
@@ -1599,7 +1970,9 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
   }
 
   private drawAnnotationsOnly(): void {
-    const drawCanvas = this.drawCanvas.nativeElement;
+    const drawCanvas = this.drawCanvas?.nativeElement;
+    if (!drawCanvas) return;
+
     const ctx = drawCanvas.getContext('2d');
     if (!ctx) return;
 
@@ -1783,7 +2156,9 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
   }
 
   private setupDrawingInteraction(): void {
-    const canvas = this.drawCanvas.nativeElement;
+    const canvas = this.drawCanvas?.nativeElement;
+    if (!canvas) return;
+
     canvas.style.touchAction = 'none';
 
     if (this.onPointerDownRef) canvas.removeEventListener('pointerdown', this.onPointerDownRef);
@@ -1802,6 +2177,8 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
   }
 
   private onPointerDown(e: PointerEvent): void {
+    if (!this.currentImage()) return;
+
     const tool = this.currentTool();
 
     if (tool === 'pan') {
@@ -1812,7 +2189,7 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
       this.panStart = { x: p.x, y: p.y };
       const off = this.panOffset();
       this.panStartOffset = { x: off.x, y: off.y };
-      this.drawCanvas.nativeElement.setPointerCapture?.(e.pointerId);
+      this.drawCanvas?.nativeElement.setPointerCapture?.(e.pointerId);
       this.drawBaseImage();
       this.drawAnnotationsOnly();
       return;
@@ -1823,7 +2200,7 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
     const point = this.pixelToNorm(e);
     if (!point) return;
 
-    this.drawCanvas.nativeElement.setPointerCapture?.(e.pointerId);
+    this.drawCanvas?.nativeElement.setPointerCapture?.(e.pointerId);
 
     if (tool === 'rect') {
       this.clearRemoteFeedback();
@@ -1880,6 +2257,7 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
   }
 
   private onPointerMove(e: PointerEvent): void {
+    if (!this.currentImage()) return;
     if (this.imageRenderRect.w === 0) return;
 
     if (this.currentTool() === 'pan' && this.isPanning) {
@@ -1920,7 +2298,9 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
   }
 
   private onPointerUp(e: PointerEvent): void {
-    this.drawCanvas.nativeElement.releasePointerCapture?.(e.pointerId);
+    if (!this.currentImage()) return;
+
+    this.drawCanvas?.nativeElement.releasePointerCapture?.(e.pointerId);
 
     if (this.currentTool() === 'pan' && this.isPanning) {
       this.isPanning = false;
@@ -2041,7 +2421,10 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
   }
 
   private pointerToCanvasPosition(e: PointerEvent | WheelEvent): { x: number; y: number } {
-    const rect = this.drawCanvas.nativeElement.getBoundingClientRect();
+    const canvas = this.drawCanvas?.nativeElement;
+    if (!canvas) return { x: 0, y: 0 };
+
+    const rect = canvas.getBoundingClientRect();
     return { x: e.clientX - rect.left, y: e.clientY - rect.top };
   }
 

@@ -31,6 +31,36 @@
     </button>
   </div>
 
+  @if (allImages().length > 0) {
+    <div class="image-kanban-card-shell">
+      <div class="image-kanban-scroll">
+        @for (img of allImages(); track img.id) {
+          <button
+            type="button"
+            [ngClass]="imageCardClasses(img)"
+            [class.is-current]="isCurrentImageCard(img.id)"
+            [style.background-image]="'linear-gradient(rgba(8,10,20,0.42), rgba(8,10,20,0.68)), url(' + img.src + ')'"
+            (click)="selectImageById(img.id)">
+            <span class="image-kanban-top">
+              <span class="image-kanban-icon" [attr.title]="imageCardStatus(img.id)">{{ imageCardIcon(img.id) }}</span>
+              <span
+                class="image-kanban-remove"
+                role="button"
+                tabindex="0"
+                aria-label="Supprimer l'image"
+                (click)="requestDeleteImage(img.id, $event)">×</span>
+            </span>
+
+            <span class="image-kanban-name">{{ imageCardName(img) }}</span>
+            <span class="image-kanban-counts">{{ imageCardCounts(img.id) }}</span>
+          </button>
+        }
+      </div>
+    </div>
+  } @else {
+    <div class="image-kanban-empty">Aucune image chargée.</div>
+  }
+
   <div class="grid-3">
     <div class="card col-span-2" style="display:flex;flex-direction:column;">
       <div class="card-header">
@@ -47,6 +77,7 @@
             type="button"
             [class.btn-primary]="currentTool() === 'pan'"
             [class.btn-secondary]="currentTool() !== 'pan'"
+            [disabled]="!currentImage()"
             (click)="setTool('pan')"
             title="Hand (Pan)"
             aria-label="Hand (Pan)">
@@ -64,6 +95,7 @@
             type="button"
             [class.btn-primary]="currentTool() === 'rect'"
             [class.btn-secondary]="currentTool() !== 'rect'"
+            [disabled]="!currentImage()"
             (click)="setTool('rect')"
             title="BBox (Rectangle)">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -76,6 +108,7 @@
             type="button"
             [class.btn-primary]="currentTool() === 'polygon'"
             [class.btn-secondary]="currentTool() !== 'polygon'"
+            [disabled]="!currentImage()"
             (click)="setTool('polygon')"
             title="Polygon (points)">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -91,6 +124,7 @@
             type="button"
             [class.btn-primary]="currentTool() === 'freehand'"
             [class.btn-secondary]="currentTool() !== 'freehand'"
+            [disabled]="!currentImage()"
             (click)="setTool('freehand')"
             title="Tracé Libre (Crayon)">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -106,12 +140,13 @@
             min="20"
             max="1200"
             step="5"
+            [disabled]="!currentImage()"
             [value]="zoom()"
             (input)="updateZoom($event)"
             style="width:80px;accent-color:var(--accent);"
           />
 
-          <button class="btn btn-sm btn-secondary" type="button" (click)="resetDrafts()">Reset</button>
+          <button class="btn btn-sm btn-secondary" type="button" [disabled]="!currentImage()" (click)="resetDrafts()">Reset</button>
         </div>
       </div>
 
@@ -121,8 +156,16 @@
         [style.cursor]="cursorStyle()"
         tabindex="0"
         id="image-container">
-        <canvas #imageCanvas style="position:absolute;top:0;left:0;"></canvas>
-        <canvas #drawCanvas style="position:absolute;top:0;left:0;"></canvas>
+        @if (currentImage()) {
+          <canvas #imageCanvas style="position:absolute;top:0;left:0;"></canvas>
+          <canvas #drawCanvas style="position:absolute;top:0;left:0;"></canvas>
+        } @else {
+          <div class="no-image-placeholder">
+            <div class="no-image-placeholder-icon">🖼</div>
+            <div class="no-image-placeholder-title">Aucune image sélectionnée</div>
+            <div class="no-image-placeholder-subtitle">Importez une image ou sélectionnez-en une dans la barre du haut.</div>
+          </div>
+        }
       </div>
     </div>
 
@@ -138,7 +181,7 @@
 
       <div class="form-group" style="margin-bottom:12px;">
         <label class="form-label">Type de défaut</label>
-        <select class="form-select" [ngModel]="annotationType()" (ngModelChange)="updateAnnotationType($event)">
+        <select class="form-select" [disabled]="!currentImage()" [ngModel]="annotationType()" (ngModelChange)="updateAnnotationType($event)">
           @for (option of defectOptions; track option) {
             <option [ngValue]="option">{{ option }}</option>
           }
@@ -153,6 +196,7 @@
             type="button"
             [class.btn-danger]="selectedSeverity() === 'Critique'"
             [class.btn-secondary]="selectedSeverity() !== 'Critique'"
+            [disabled]="!currentImage()"
             (click)="setSeverity('Critique')">Critique</button>
 
           <button
@@ -160,6 +204,7 @@
             type="button"
             [class.btn-orange]="selectedSeverity() === 'Majeur'"
             [class.btn-secondary]="selectedSeverity() !== 'Majeur'"
+            [disabled]="!currentImage()"
             (click)="setSeverity('Majeur')">Majeur</button>
 
           <button
@@ -167,6 +212,7 @@
             type="button"
             [class.btn-success]="selectedSeverity() === 'Mineur'"
             [class.btn-secondary]="selectedSeverity() !== 'Mineur'"
+            [disabled]="!currentImage()"
             (click)="setSeverity('Mineur')">Mineur</button>
         </div>
       </div>
@@ -175,6 +221,7 @@
         <label class="form-label">Description détaillée contextuelle</label>
         <textarea
           class="form-textarea"
+          [disabled]="!currentImage()"
           [ngModel]="annotationDesc()"
           (ngModelChange)="updateAnnotationDesc($event)"
           placeholder="Ex: Rayure longitudinale causée par un frottement outil sur l'axe X..."></textarea>
@@ -257,55 +304,59 @@
       </span>
     </div>
 
-    <table style="width:100%;border-collapse:collapse;font-size:12px;">
-      <thead>
-        <tr style="color:var(--text-muted);">
-          <th style="text-align:left;padding:8px 12px;border-bottom:1px solid var(--border);">Type de Forme</th>
-          <th style="padding:8px 12px;border-bottom:1px solid var(--border);">Classe (Défaut)</th>
-          <th style="padding:8px 12px;border-bottom:1px solid var(--border);">Sévérité</th>
-          <th style="text-align:left;padding:8px 12px;border-bottom:1px solid var(--border);">Description textuelle</th>
-          <th style="padding:8px 12px;border-bottom:1px solid var(--border);">Action</th>
-        </tr>
-      </thead>
-
-      <tbody>
-        @for (ann of imageAnnotations(); track ann.id) {
-          <tr
-            style="border-bottom:1px solid var(--border); transition:background 0.2s; cursor:pointer;"
-            [style.background]="isBaseRowCurrent(ann.id) || hoveredAnnotId() === ann.id ? 'var(--bg-card-hover)' : 'transparent'"
-            (mouseenter)="hoverAnnotation(ann.id, true)"
-            (mouseleave)="hoverAnnotation(ann.id, false)"
-            (click)="editAnnotation(ann.id)">
-            <td style="padding:10px 12px;color:var(--cyan);font-family:monospace;">{{ ann.shape }}</td>
-            <td style="padding:10px 12px;text-align:center;">
-              <span style="color:var(--text-primary);font-weight:600;">{{ ann.def }}</span>
-            </td>
-            <td style="padding:10px 12px;text-align:center;">
-              <span class="tag" [ngClass]="ann.scls">{{ ann.sev }}</span>
-            </td>
-            <td style="padding:10px 12px;color:var(--text-secondary);max-width:320px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">
-              {{ ann.desc }}
-            </td>
-            <td style="padding:10px 12px;text-align:center;">
-              <button
-                class="btn btn-sm btn-secondary"
-                type="button"
-                style="margin-right:4px;"
-                (click)="editAnnotation(ann.id); $event.stopPropagation()">
-                Éditer
-              </button>
-
-              <button
-                class="btn btn-sm btn-danger"
-                type="button"
-                (click)="deletePersistedAnnotation(ann.id); $event.stopPropagation()">
-                🗑
-              </button>
-            </td>
+    @if (currentImage()) {
+      <table style="width:100%;border-collapse:collapse;font-size:12px;">
+        <thead>
+          <tr style="color:var(--text-muted);">
+            <th style="text-align:left;padding:8px 12px;border-bottom:1px solid var(--border);">Type de Forme</th>
+            <th style="padding:8px 12px;border-bottom:1px solid var(--border);">Classe (Défaut)</th>
+            <th style="padding:8px 12px;border-bottom:1px solid var(--border);">Sévérité</th>
+            <th style="text-align:left;padding:8px 12px;border-bottom:1px solid var(--border);">Description textuelle</th>
+            <th style="padding:8px 12px;border-bottom:1px solid var(--border);">Action</th>
           </tr>
-        }
-      </tbody>
-    </table>
+        </thead>
+
+        <tbody>
+          @for (ann of imageAnnotations(); track ann.id) {
+            <tr
+              style="border-bottom:1px solid var(--border); transition:background 0.2s; cursor:pointer;"
+              [style.background]="isBaseRowCurrent(ann.id) || hoveredAnnotId() === ann.id ? 'var(--bg-card-hover)' : 'transparent'"
+              (mouseenter)="hoverAnnotation(ann.id, true)"
+              (mouseleave)="hoverAnnotation(ann.id, false)"
+              (click)="editAnnotation(ann.id)">
+              <td style="padding:10px 12px;color:var(--cyan);font-family:monospace;">{{ ann.shape }}</td>
+              <td style="padding:10px 12px;text-align:center;">
+                <span style="color:var(--text-primary);font-weight:600;">{{ ann.def }}</span>
+              </td>
+              <td style="padding:10px 12px;text-align:center;">
+                <span class="tag" [ngClass]="ann.scls">{{ ann.sev }}</span>
+              </td>
+              <td style="padding:10px 12px;color:var(--text-secondary);max-width:320px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">
+                {{ ann.desc }}
+              </td>
+              <td style="padding:10px 12px;text-align:center;">
+                <button
+                  class="btn btn-sm btn-secondary"
+                  type="button"
+                  style="margin-right:4px;"
+                  (click)="editAnnotation(ann.id); $event.stopPropagation()">
+                  Éditer
+                </button>
+
+                <button
+                  class="btn btn-sm btn-danger"
+                  type="button"
+                  (click)="deletePersistedAnnotation(ann.id); $event.stopPropagation()">
+                  🗑
+                </button>
+              </td>
+            </tr>
+          }
+        </tbody>
+      </table>
+    } @else {
+      <div class="table-empty-state">Aucune image sélectionnée.</div>
+    }
   </div>
 
   @if (saveToast().visible) {
