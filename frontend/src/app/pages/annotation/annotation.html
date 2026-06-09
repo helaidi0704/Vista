@@ -99,7 +99,7 @@
 
       <button class="btn btn-primary" style="width:100%;margin-top:auto;" (click)="saveAnnotation()">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><path d="M19 21H5a2 2 0 01-2-2V5a2 2 0 012-2h11l5 5v11a2 2 0 01-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>
-        Enregistrer les annotations
+        {{ editingId() ? 'Mettre à jour' : 'Enregistrer les annotations' }}
       </button>
     </div>
   </div>
@@ -134,7 +134,7 @@
           <td style="padding:10px 12px;text-align:center;"><span class="tag {{ann.scls}}">{{ann.sev}}</span></td>
           <td style="padding:10px 12px;color:var(--text-secondary);max-width:320px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">{{ann.desc}}</td>
           <td style="padding:10px 12px;text-align:center;">
-            <button class="btn btn-sm btn-secondary" style="margin-right:4px;">Éditer</button>
+            <button class="btn btn-sm btn-secondary" style="margin-right:4px;" (click)="startEditAnnotation(ann.id)">Éditer</button>
             <button class="btn btn-sm btn-danger" (click)="deleteAnnotation(ann.id)">🗑</button>
           </td>
         </tr>

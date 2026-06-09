@@ -29,6 +29,7 @@ export class AnnotationComponent implements AfterViewInit {
   ]);
 
   hoveredAnnotId = signal<number | null>(null);
+  editingId = signal<number | null>(null);
 
   ngAfterViewInit() {
     setTimeout(() => {
@@ -59,26 +60,55 @@ export class AnnotationComponent implements AfterViewInit {
   }
 
   saveAnnotation() {
-    const newAnnot = {
-      id: Date.now(),
-      type: Math.random() > 0.5 ? 'bbox' : 'poly',
-      shape: Math.random() > 0.5 ? '🟥 BBox' : '〰️ Tracé libre',
-      def: this.annotationType(),
-      sev: this.selectedSeverity(),
-      scls: this.selectedSeverity() === 'Critique' ? 'tag-red' : this.selectedSeverity() === 'Majeur' ? 'tag-orange' : 'tag-cyan',
-      desc: this.annotationDesc(),
-      coords: { nx: 0.1 + Math.random() * 0.8, ny: 0.1 + Math.random() * 0.8, nw: 0.1, nh: 0.1 }
-    };
+    const editing = this.editingId();
+    if (editing) {
+      this.imageAnnotations.update(annots => annots.map(a => {
+        if (a.id !== editing) return a;
+        const updated = {
+          ...a,
+          def: this.annotationType(),
+          sev: this.selectedSeverity(),
+          scls: this.selectedSeverity() === 'Critique' ? 'tag-red' : this.selectedSeverity() === 'Majeur' ? 'tag-orange' : 'tag-cyan',
+          desc: this.annotationDesc()
+        };
+        return updated;
+      }));
+      this.editingId.set(null);
+    } else {
+      const newAnnot = {
+        id: Date.now(),
+        type: Math.random() > 0.5 ? 'bbox' : 'poly',
+        shape: Math.random() > 0.5 ? '🟥 BBox' : '〰️ Tracé libre',
+        def: this.annotationType(),
+        sev: this.selectedSeverity(),
+        scls: this.selectedSeverity() === 'Critique' ? 'tag-red' : this.selectedSeverity() === 'Majeur' ? 'tag-orange' : 'tag-cyan',
+        desc: this.annotationDesc(),
+        coords: { nx: 0.1 + Math.random() * 0.8, ny: 0.1 + Math.random() * 0.8, nw: 0.1, nh: 0.1 }
+      };
 
-    this.imageAnnotations.update(annots => [...annots, newAnnot]);
+      this.imageAnnotations.update(annots => [...annots, newAnnot]);
+    }
+
     this.renderAnnotations();
     this.drawAnnotationsOnly();
     this.annotationDesc.set('');
   }
 
+  startEditAnnotation(id: number) {
+    const ann = this.imageAnnotations().find(a => a.id === id);
+    if (!ann) return;
+    this.editingId.set(ann.id);
+    this.annotationType.set(ann.def || '');
+    this.selectedSeverity.set(ann.sev || 'Mineur');
+    this.annotationDesc.set(ann.desc || '');
+    this.hoveredAnnotId.set(ann.id);
+    this.drawAnnotationsOnly();
+  }
+
   deleteAnnotation(id: number) {
     this.imageAnnotations.update(annots => annots.filter(a => a.id !== id));
     if (this.hoveredAnnotId() === id) this.hoveredAnnotId.set(null);
+    if (this.editingId() === id) this.editingId.set(null);
     this.renderAnnotations();
     this.drawAnnotationsOnly();
   }
