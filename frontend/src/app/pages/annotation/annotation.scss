@@ -447,3 +447,37 @@
     transform: translateY(0);
   }
 }
+
+.annotation-mode-banner {
+  margin-bottom: 12px;
+  padding: 10px 12px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 12px;
+  background: rgba(13, 14, 26, 0.5);
+}
+
+.annotation-mode-banner.is-edit {
+  border-color: rgba(0, 199, 190, 0.28);
+  box-shadow: 0 0 0 1px rgba(0, 199, 190, 0.12);
+}
+
+.annotation-mode-banner-title {
+  font-size: 12px;
+  font-weight: 800;
+  color: var(--text-primary);
+}
+
+.annotation-mode-banner-text {
+  margin-top: 4px;
+  font-size: 11px;
+  line-height: 1.45;
+  color: var(--text-secondary);
+}
+
+.annotation-mode-banner-tip {
+  margin-top: 8px;
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--cyan);
+}
+

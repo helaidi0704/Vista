@@ -185,6 +185,22 @@ interface SaveToastState {
   message: string;
 }
 
+type PanelMode = 'idle' | 'create' | 'edit-base' | 'edit-draft';
+type BBoxEditHandle = 'move' | 'nw' | 'ne' | 'sw' | 'se';
+
+interface DeletePersistedAnnotationResponseDto {
+  success: boolean;
+  id: number;
+  receivedAt: string;
+}
+
+interface BBoxEditState {
+  workId: string;
+  handle: BBoxEditHandle;
+  startPointer: NormPoint;
+  startBBox: BBox;
+}
+
 type ImageCardStatus = 'pending' | 'draft' | 'ready';
 
 interface RegisterImageResponseDto {
@@ -209,6 +225,8 @@ interface UndoState {
   draftPolygonCurrent: { points: NormPoint[]; closed: boolean };
   polygonPreview: NormPoint | null;
   draftFreehandCurrent: { points: NormPoint[]; drawing: boolean };
+  kanbanItems: KanbanWorkItem[];
+  currentWorkId: string | null;
 }
 
 @Component({
@@ -230,7 +248,6 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
 
   private readonly STORAGE_KEY = 'vista.viewer.annotation.workspace.v3';
   private readonly SAVE_ENDPOINT = '/api/images/save-annotations';
-  private readonly ENABLE_REAL_BACKEND_CALL = false;
   private readonly MAX_VISUAL_ITEMS = 10;
 
   private readonly DEFAULT_IMAGE_ID = 'asset_carter_moteur';
@@ -291,6 +308,9 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
   private readonly CLOSE_TOL_PX = 14;
   private nextAnnotationId = 1;
   private nextDraftId = 1;
+  private readonly BBOX_HANDLE_HIT_RADIUS_PX = 10;
+  private readonly BBOX_MIN_SIZE = 0.003;
+  private bboxEditState: BBoxEditState | null = null;
   private nextKanbanOrder = 1;
   private lastDraftAutosaveAt = 0;
   private toastTimeoutId: ReturnType<typeof setTimeout> | null = null;
@@ -459,26 +479,75 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
     this.focusBaseAnnotation(id);
   }
 
-  removeCurrentKanbanItem(): void {
-    const id = this.currentWorkId();
-    if (!id) return;
-    this.clearRemoteFeedback();
-    this.removeKanbanItem(id);
-  }
 
-  clearCurrentWork(): void {
-    this.currentWorkId.set(null);
-    this.persistWorkspaceState();
-    this.drawAnnotationsOnly();
-  }
 
   draftCount(): number {
-    return this.kanbanItems().filter((item) => item.source === 'draft').length;
+    return this.localDraftWorkItemsCount();
+  }
+
+  panelMode(): PanelMode {
+    const current = this.currentWorkItem();
+    if (!current) return this.hasInProgressShape() ? 'create' : 'idle';
+    if (this.isWorkItemDraftMode(current)) return 'edit-draft';
+    return 'edit-base';
+  }
+
+  panelModeLabel(): string {
+    const mode = this.panelMode();
+    const current = this.currentWorkItem();
+
+    if (mode === 'edit-base') {
+      const id = current?.baseAnnotationId;
+      return id != null ? `Édition annotation #${id}` : 'Édition annotation base';
+    }
+
+    if (mode === 'edit-draft') {
+      if (current?.source === 'base' && current.baseAnnotationId != null) {
+        return `Brouillon de mise à jour #${current.baseAnnotationId}`;
+      }
+      return current ? `Édition brouillon ${this.kanbanBadgeLabel(current)}` : 'Édition brouillon';
+    }
+
+    if (mode === 'create') return 'Création de brouillon';
+    return 'Aucune annotation sélectionnée';
+  }
+
+  panelModeDescription(): string {
+    const mode = this.panelMode();
+    const current = this.currentWorkItem();
+
+    if (mode === 'edit-base') {
+      return "L'annotation base courante est sélectionnée. Toute modification locale la fera repasser en brouillon jusqu'à la prochaine sauvegarde en base.";
+    }
+
+    if (mode === 'edit-draft') {
+      if (current?.source === 'base') {
+        return "Cette annotation base a été modifiée localement et est maintenant en brouillon de mise à jour jusqu'à la prochaine sauvegarde en base.";
+      }
+      return "Ce brouillon peut être modifié localement jusqu'à la prochaine sauvegarde en base.";
+    }
+
+    if (mode === 'create') {
+      return "Un dessin est en cours ou un brouillon vient d'être créé. Finalisez-le puis enregistrez-le.";
+    }
+
+    return "Sélectionnez une annotation existante ou dessinez une nouvelle annotation.";
+  }
+
+  isRectGeometryEditable(): boolean {
+    const current = this.currentWorkItem();
+    return !!current && this.currentTool() === 'rect' && current.geometry.type === 'bbox' && !!this.currentImage();
   }
 
   cursorStyle(): string {
     if (!this.currentImage()) return 'default';
+
     if (this.currentTool() === 'pan') return this.isPanning ? 'grabbing' : 'grab';
+
+    if (this.currentTool() === 'rect' && this.isRectGeometryEditable()) {
+      return this.bboxEditState ? 'grabbing' : 'crosshair';
+    }
+
     switch (this.currentTool()) {
       case 'rect':
       case 'polygon':
@@ -516,9 +585,7 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
     input.value = '';
   }
 
-  hasCurrentImage(): boolean {
-    return this.currentImage() !== null;
-  }
+
 
   allImages(): ImageModel[] {
     return this.imageList();
@@ -535,20 +602,26 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
 
   private imageDraftCount(imageId: string): number {
     const state = this.readWorkspaceState();
-    const persisted = state?.draftsByImageId?.[imageId];
-    if (persisted) {
-      const hasPartial =
-        !!persisted.draftRectCurrent?.dragging ||
-        (persisted.draftPolygonCurrent?.points?.length ?? 0) > 0 ||
-        persisted.draftFreehandCurrent?.drawing;
-      return (persisted.draftShapes?.length ?? 0) + (hasPartial ? 1 : 0);
+    const isCurrent = this.currentImage()?.id === imageId;
+
+    if (isCurrent) {
+      return this.localDraftCountWithInProgress();
     }
 
-    if (this.currentImage()?.id === imageId) {
-      return this.draftShapes.length + (this.hasInProgressShape() ? 1 : 0);
+    const persistedDraft = state?.draftsByImageId?.[imageId];
+    const persistedKanbanItems = state?.kanbanByImageId?.[imageId]?.items ?? [];
+    const persistedDraftItemsCount = persistedKanbanItems.filter((item) => this.isWorkItemDraftMode(item)).length;
+
+    if (!persistedDraft) {
+      return persistedDraftItemsCount;
     }
 
-    return 0;
+    const hasPartial =
+      !!persistedDraft.draftRectCurrent?.dragging ||
+      (persistedDraft.draftPolygonCurrent?.points?.length ?? 0) > 0 ||
+      persistedDraft.draftFreehandCurrent?.drawing;
+
+    return persistedDraftItemsCount + (hasPartial ? 1 : 0);
   }
 
   imageCardStatus(imageId: string): ImageCardStatus {
@@ -614,6 +687,7 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
     this.imageFileMeta.set('—');
     this.undoStack = [];
     this.redoStack = [];
+    this.bboxEditState = null;
     this.drawBaseImage();
     this.drawAnnotationsOnly();
   }
@@ -663,7 +737,7 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
     this.clearRemoteFeedback();
     this.isSavingRemote.set(true);
 
-    this.deleteImageDryRun$(imageId).subscribe({
+    this.deleteImageRequest$(imageId).subscribe({
       next: (response) => {
         if (!response.success) {
           this.handleSaveFailure("La suppression de l'image ne s'est pas faite.");
@@ -737,7 +811,7 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
     this.isSavingRemote.set(true);
     this.clearRemoteFeedback();
 
-    this.registerImageDryRun$(candidate).subscribe({
+    this.registerImageRequest$(candidate).subscribe({
       next: (response) => {
         if (!response.success) {
           this.handleSaveFailure("L'ajout de l'image ne s'est pas fait.");
@@ -777,6 +851,34 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
       backendMessage: 'Dry-run image registration only.',
       receivedAt,
     }).pipe(delay(250));
+  }
+
+  private saveAnnotationsRequest$(dto: SaveAnnotationsRequestDto): Observable<SaveAnnotationsResponseDto> {
+    return this.saveToBackendDryRun$(dto);
+    /*
+    return this.saveToBackendHttp$(dto);
+    */
+  }
+
+  private registerImageRequest$(image: ImageModel): Observable<RegisterImageResponseDto> {
+    return this.registerImageDryRun$(image);
+    /*
+    return this.registerImageHttp$(image);
+    */
+  }
+
+  private deleteImageRequest$(imageId: string): Observable<DeleteImageResponseDto> {
+    return this.deleteImageDryRun$(imageId);
+    /*
+    return this.deleteImageHttp$(imageId);
+    */
+  }
+
+  private deletePersistedAnnotationRequest$(id: number): Observable<DeletePersistedAnnotationResponseDto> {
+    return this.deletePersistedAnnotationDryRun$(id);
+    /*
+    return this.deletePersistedAnnotationHttp$(id);
+    */
   }
 
   private deleteImageDryRun$(imageId: string): Observable<DeleteImageResponseDto> {
@@ -864,15 +966,9 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
   }
 
   setCurrentWork(workId: string | null): void {
+    this.bboxEditState = null;
     this.currentWorkId.set(workId);
-    const current = workId ? this.kanbanItems().find((item) => item.workId === workId) ?? null : null;
-
-    if (current) {
-      this.selectedSeverity.set(current.meta.sev);
-      this.annotationType.set(current.meta.def);
-      this.annotationDesc.set(current.meta.desc);
-    }
-
+    this.syncEditorFromCurrentWork();
     this.persistWorkspaceState();
     this.drawAnnotationsOnly();
   }
@@ -916,6 +1012,10 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
 
     if (removed?.source === 'draft' && removed.draftId) {
       this.draftShapes = this.draftShapes.filter((draft) => draft.id !== removed.draftId);
+    }
+
+    if (this.bboxEditState?.workId === workId) {
+      this.bboxEditState = null;
     }
 
     if (wasCurrent) this.currentWorkId.set(null);
@@ -992,6 +1092,23 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
     return this.currentWorkId() === workId;
   }
 
+  private isWorkItemDraftMode(item: KanbanWorkItem): boolean {
+    return item.source === 'draft' || item.dirty;
+  }
+
+  private localDraftWorkItemsCount(): number {
+    return this.kanbanItems().filter((item) => this.isWorkItemDraftMode(item)).length;
+  }
+
+  private syncEditorFromCurrentWork(): void {
+    const current = this.currentWorkItem();
+    if (!current) return;
+
+    this.selectedSeverity.set(current.meta.sev);
+    this.annotationType.set(current.meta.def);
+    this.annotationDesc.set(current.meta.desc);
+  }
+
   hasBaseItemsInKanban(): boolean {
     return this.kanbanItems().some((item) => item.source === 'base');
   }
@@ -1010,7 +1127,9 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
   }
 
   kanbanItemClasses(item: KanbanWorkItem): string {
-    return item.source === 'base' ? 'visual-item visual-item-base' : 'visual-item visual-item-draft';
+    return this.isWorkItemDraftMode(item)
+      ? 'visual-item visual-item-draft'
+      : 'visual-item visual-item-base';
   }
 
   private currentHighlightMatchesGeometry(geometry: Geometry, fallbackAnnotationId?: number): boolean {
@@ -1029,10 +1148,17 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
   }
 
   deletePersistedAnnotation(id: number): void {
+    // confirmation before performing deletion
+    const ann = this.imageAnnotations().find((item) => item.id === id);
+    if (!ann) return;
+
+    const confirmed = window.confirm(`Supprimer définitivement l'annotation #${id} de l'image courante ?`);
+    if (!confirmed) return;
+
     this.clearRemoteFeedback();
     this.isSavingRemote.set(true);
 
-    this.deletePersistedAnnotationDryRun$(id).subscribe({
+    this.deletePersistedAnnotationRequest$(id).subscribe({
       next: (response) => {
         if (!response.success) {
           this.handleSaveFailure('La suppression ne s’est pas faite.');
@@ -1044,6 +1170,7 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
         this.kanbanItems.update((items) => items.filter((item) => item.source !== 'base' || item.baseAnnotationId !== id));
         if (this.hoveredAnnotId() === id) this.hoveredAnnotId.set(null);
         if (wasCurrent) this.currentWorkId.set(null);
+        if (wasCurrent) this.bboxEditState = null;
 
         this.showSaveToast('success', 'Annotation supprimée.');
         this.persistWorkspaceState();
@@ -1085,6 +1212,8 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
         draftPolygonCurrent: this.draftPolygonCurrent,
         polygonPreview: this.polygonPreview,
         draftFreehandCurrent: this.draftFreehandCurrent,
+        kanbanItems: this.kanbanItems(),
+        currentWorkId: this.currentWorkId(),
       } satisfies UndoState),
     ) as UndoState;
   }
@@ -1095,7 +1224,11 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
     this.draftPolygonCurrent = state.draftPolygonCurrent ?? { points: [], closed: false };
     this.polygonPreview = state.polygonPreview ?? null;
     this.draftFreehandCurrent = state.draftFreehandCurrent ?? { points: [], drawing: false };
+    this.kanbanItems.set((state.kanbanItems ?? []).slice().sort((a, b) => a.order - b.order));
+    this.currentWorkId.set(state.currentWorkId ?? null);
+    this.bboxEditState = null;
 
+    this.syncEditorFromCurrentWork();
     this.drawAnnotationsOnly();
   }
 
@@ -1152,12 +1285,15 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
 
     this.undoStack = [];
     this.redoStack = [];
+    this.bboxEditState = null;
   }
 
   resetDrafts(): void {
+    const currentBeforeReset = this.currentWorkItem();
+
     const hasAnyDraft =
       this.draftShapes.length > 0 ||
-      this.kanbanItems().some((item) => item.source === 'draft') ||
+      this.localDraftWorkItemsCount() > 0 ||
       !!this.draftRectCurrent?.dragging ||
       this.draftPolygonCurrent.points.length > 0 ||
       this.draftFreehandCurrent.drawing;
@@ -1165,8 +1301,16 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
     if (hasAnyDraft) this.pushHistory();
 
     this.clearDraftsNoHistory();
-    this.kanbanItems.update((items) => items.filter((item) => item.source !== 'draft'));
-    if (this.currentWorkItem()?.source === 'draft') this.currentWorkId.set(null);
+
+    this.kanbanItems.update((items) =>
+      items.filter((item) => !(item.source === 'draft' || item.dirty)),
+    );
+
+    if (currentBeforeReset && this.isWorkItemDraftMode(currentBeforeReset)) {
+      this.currentWorkId.set(null);
+    }
+
+    this.bboxEditState = null;
     this.clearRemoteFeedback();
     this.persistWorkspaceState();
     this.drawAnnotationsOnly();
@@ -1214,11 +1358,7 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
     this.isSavingRemote.set(true);
 
     try {
-      const response = await firstValueFrom(
-        this.ENABLE_REAL_BACKEND_CALL
-          ? this.saveToBackendDryRun$(dto)
-          : this.saveToBackendDryRun$(dto),
-      );
+      const response = await firstValueFrom(this.saveAnnotationsRequest$(dto));
 
       if (!response.success) {
         this.handleSaveFailure("L'enregistrement ne s'est pas fait.");
@@ -1452,7 +1592,7 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
     this.currentWorkId.set(null);
   }
 
-  private deletePersistedAnnotationDryRun$(id: number): Observable<{ success: boolean; id: number; receivedAt: string }> {
+  private deletePersistedAnnotationDryRun$(id: number): Observable<DeletePersistedAnnotationResponseDto> {
     void this.http;
     const receivedAt = new Date().toISOString();
     console.groupCollapsed('[VISTA][DRY-RUN API] DELETE /api/annotations/' + id);
@@ -1465,8 +1605,8 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
   }
 
   /*
-  private deletePersistedAnnotationHttp$(id: number): Observable<{ success: boolean; id: number; receivedAt: string }> {
-    return this.http.delete<{ success: boolean; id: number; receivedAt: string }>(
+  private deletePersistedAnnotationHttp$(id: number): Observable<DeletePersistedAnnotationResponseDto> {
+    return this.http.delete<DeletePersistedAnnotationResponseDto>(
       `/api/annotations/${id}`,
       {
         observe: 'response',
@@ -1476,13 +1616,13 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
       },
     ).pipe(
       timeout(10000),
-      map((response) => {
-        const body = response.body;
-        if (!body || body.success !== true || body.id !== id) {
-          throw new Error('Invalid delete response');
-        }
-        return body;
-      }),
+        map((response) => {
+          const body = response.body;
+          if (!body || body.success !== true || body.id !== id) {
+            throw new Error('Invalid delete response');
+          }
+          return body;
+        }),
       catchError((error: unknown) => {
         console.error('[VISTA][API] deletePersistedAnnotation failed', error);
         return throwError(() => new Error('DELETE_BACKEND_FAILED'));
@@ -1570,6 +1710,10 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
       || this.draftFreehandCurrent.drawing;
   }
 
+  private localDraftCountWithInProgress(): number {
+    return this.localDraftWorkItemsCount() + (this.hasInProgressShape() ? 1 : 0);
+  }
+
   private clearRemoteFeedback(): void {
     this.remoteSaveSuccess.set(null);
     this.remoteSaveError.set(null);
@@ -1636,12 +1780,7 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
     const maxOrder = items.reduce((max, item) => Math.max(max, item.order), 0);
     this.nextKanbanOrder = Math.max(state?.nextOrder ?? 1, maxOrder + 1, 1);
 
-    const current = this.currentWorkItem();
-    if (current) {
-      this.selectedSeverity.set(current.meta.sev);
-      this.annotationType.set(current.meta.def);
-      this.annotationDesc.set(current.meta.desc);
-    }
+    this.syncEditorFromCurrentWork();
   }
 
   private readWorkspaceState(): PersistedAnnotationWorkspaceV3 | null {
@@ -2017,6 +2156,7 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
       const geometry: Geometry = { type: 'freehand', data: { points: this.draftFreehandCurrent.points, closed: false } };
       this.drawGeometry(ctx, geometry, -3, 'draft', 'Draft', true);
     }
+    this.drawCurrentBBoxHandles(ctx);
   }
 
   private drawGeometry(
@@ -2181,6 +2321,28 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
 
     const tool = this.currentTool();
 
+    if (tool === 'rect' && this.isRectGeometryEditable()) {
+      const handle = this.hitTestCurrentBBoxHandle(e);
+      const current = this.currentBBoxWorkItem();
+      if (handle && current && current.geometry.type === 'bbox') {
+        const point = this.pixelToNorm(e);
+        if (!point) return;
+
+        this.pushHistory();
+        this.clearRemoteFeedback();
+        this.bboxEditState = {
+          workId: current.workId,
+          handle,
+          startPointer: point,
+          startBBox: this.cloneGeometry(current.geometry.data),
+        };
+
+        this.drawCanvas?.nativeElement.setPointerCapture?.(e.pointerId);
+        this.drawAnnotationsOnly();
+        return;
+      }
+    }
+
     if (tool === 'pan') {
       if (this.imageRenderRect.w === 0) this.drawBaseImage();
 
@@ -2260,6 +2422,21 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
     if (!this.currentImage()) return;
     if (this.imageRenderRect.w === 0) return;
 
+    if (this.bboxEditState) {
+      const point = this.pixelToNorm(e);
+      if (!point) return;
+
+      const nextBBox = this.resizeBBoxFromHandle(
+        this.bboxEditState.startBBox,
+        this.bboxEditState.handle,
+        point,
+        this.bboxEditState.startPointer,
+      );
+
+      this.updateWorkGeometry(this.bboxEditState.workId, { type: 'bbox', data: nextBBox });
+      return;
+    }
+
     if (this.currentTool() === 'pan' && this.isPanning) {
       const p = this.pointerToCanvasPosition(e);
       const dx = p.x - this.panStart.x;
@@ -2301,6 +2478,13 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
     if (!this.currentImage()) return;
 
     this.drawCanvas?.nativeElement.releasePointerCapture?.(e.pointerId);
+
+    if (this.bboxEditState) {
+      this.bboxEditState = null;
+      this.persistWorkspaceState();
+      this.drawAnnotationsOnly();
+      return;
+    }
 
     if (this.currentTool() === 'pan' && this.isPanning) {
       this.isPanning = false;
@@ -2393,6 +2577,169 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
 
   private severityToClass(sev: SeverityUi): AnnotationMeta['scls'] {
     return sev === 'Critique' ? 'tag-red' : sev === 'Majeur' ? 'tag-orange' : 'tag-cyan';
+  }
+
+
+  private currentBBoxWorkItem(): KanbanWorkItem | null {
+    const current = this.currentWorkItem();
+    if (!current || current.geometry.type !== 'bbox') return null;
+    return current;
+  }
+
+  private currentBBoxData(): BBox | null {
+    const item = this.currentBBoxWorkItem();
+    return item?.geometry.type === 'bbox' ? item.geometry.data : null;
+  }
+
+  private clamp01(value: number): number {
+    return Math.max(0, Math.min(1, value));
+  }
+
+  private cloneGeometry<T>(value: T): T {
+    return JSON.parse(JSON.stringify(value)) as T;
+  }
+
+  private syncDraftGeometry(workId: string, geometry: Geometry): void {
+    const work = this.kanbanItems().find((item) => item.workId === workId);
+    if (!work?.draftId) return;
+    this.draftShapes = this.draftShapes.map((draft) =>
+      draft.id === work.draftId
+        ? {
+            ...draft,
+            geometry: this.cloneGeometry(geometry),
+          }
+        : draft,
+    );
+  }
+
+  private updateWorkGeometry(workId: string, geometry: Geometry): void {
+    this.kanbanItems.update((items) =>
+      items.map((item) =>
+        item.workId === workId
+          ? {
+              ...item,
+              dirty: true,
+              geometry: this.cloneGeometry(geometry),
+            }
+          : item,
+      ),
+    );
+
+    this.syncDraftGeometry(workId, geometry);
+    this.persistWorkspaceState();
+    this.drawAnnotationsOnly();
+  }
+
+  private bboxHandleCenters(bbox: BBox): Record<Exclude<BBoxEditHandle, 'move'>, { x: number; y: number }> {
+    const ix = this.imageRenderRect.x;
+    const iy = this.imageRenderRect.y;
+    const iw = this.imageRenderRect.w;
+    const ih = this.imageRenderRect.h;
+
+    const x1 = ix + bbox.nx * iw;
+    const y1 = iy + bbox.ny * ih;
+    const x2 = ix + (bbox.nx + bbox.nw) * iw;
+    const y2 = iy + (bbox.ny + bbox.nh) * ih;
+
+    return {
+      nw: { x: x1, y: y1 },
+      ne: { x: x2, y: y1 },
+      sw: { x: x1, y: y2 },
+      se: { x: x2, y: y2 },
+    };
+  }
+
+  private hitTestCurrentBBoxHandle(e: PointerEvent): BBoxEditHandle | null {
+    const bbox = this.currentBBoxData();
+    if (!bbox || this.imageRenderRect.w === 0) return null;
+
+    const p = this.pointerToCanvasPosition(e);
+    const centers = this.bboxHandleCenters(bbox);
+
+    for (const handle of ['nw', 'ne', 'sw', 'se'] as const) {
+      const c = centers[handle];
+      const d = Math.hypot(p.x - c.x, p.y - c.y);
+      if (d <= this.BBOX_HANDLE_HIT_RADIUS_PX) return handle;
+    }
+
+    const ix = this.imageRenderRect.x + bbox.nx * this.imageRenderRect.w;
+    const iy = this.imageRenderRect.y + bbox.ny * this.imageRenderRect.h;
+    const iw = bbox.nw * this.imageRenderRect.w;
+    const ih = bbox.nh * this.imageRenderRect.h;
+
+    if (p.x >= ix && p.x <= ix + iw && p.y >= iy && p.y <= iy + ih) return 'move';
+    return null;
+  }
+
+  private resizeBBoxFromHandle(start: BBox, handle: BBoxEditHandle, pointer: NormPoint, startPointer: NormPoint): BBox {
+    const startX1 = start.nx;
+    const startY1 = start.ny;
+    const startX2 = start.nx + start.nw;
+    const startY2 = start.ny + start.nh;
+
+    const dx = pointer.nx - startPointer.nx;
+    const dy = pointer.ny - startPointer.ny;
+
+    if (handle === 'move') {
+      const nx = this.clamp01(start.nx + dx);
+      const ny = this.clamp01(start.ny + dy);
+      const boundedX = Math.min(nx, 1 - start.nw);
+      const boundedY = Math.min(ny, 1 - start.nh);
+      return { nx: boundedX, ny: boundedY, nw: start.nw, nh: start.nh };
+    }
+
+    let x1 = startX1;
+    let y1 = startY1;
+    let x2 = startX2;
+    let y2 = startY2;
+
+    if (handle === 'nw' || handle === 'sw') x1 = this.clamp01(startX1 + dx);
+    if (handle === 'ne' || handle === 'se') x2 = this.clamp01(startX2 + dx);
+    if (handle === 'nw' || handle === 'ne') y1 = this.clamp01(startY1 + dy);
+    if (handle === 'sw' || handle === 'se') y2 = this.clamp01(startY2 + dy);
+
+    if (x2 - x1 < this.BBOX_MIN_SIZE) {
+      if (handle === 'nw' || handle === 'sw') x1 = x2 - this.BBOX_MIN_SIZE;
+      else x2 = x1 + this.BBOX_MIN_SIZE;
+    }
+
+    if (y2 - y1 < this.BBOX_MIN_SIZE) {
+      if (handle === 'nw' || handle === 'ne') y1 = y2 - this.BBOX_MIN_SIZE;
+      else y2 = y1 + this.BBOX_MIN_SIZE;
+    }
+
+    x1 = this.clamp01(x1);
+    y1 = this.clamp01(y1);
+    x2 = this.clamp01(x2);
+    y2 = this.clamp01(y2);
+
+    return {
+      nx: x1,
+      ny: y1,
+      nw: Math.max(this.BBOX_MIN_SIZE, x2 - x1),
+      nh: Math.max(this.BBOX_MIN_SIZE, y2 - y1),
+    };
+  }
+
+  private drawCurrentBBoxHandles(ctx: CanvasRenderingContext2D): void {
+    if (!this.isRectGeometryEditable()) return;
+    const bbox = this.currentBBoxData();
+    if (!bbox) return;
+
+    const centers = this.bboxHandleCenters(bbox);
+
+    ctx.save();
+    for (const key of ['nw', 'ne', 'sw', 'se'] as const) {
+      const c = centers[key];
+      ctx.beginPath();
+      ctx.arc(c.x, c.y, 5, 0, Math.PI * 2);
+      ctx.fillStyle = '#FFFFFF';
+      ctx.fill();
+      ctx.lineWidth = 2;
+      ctx.strokeStyle = '#00C7BE';
+      ctx.stroke();
+    }
+    ctx.restore();
   }
 
 

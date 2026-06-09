@@ -179,6 +179,16 @@
         </span>
       </div>
 
+      <div class="annotation-mode-banner" [class.is-edit]="panelMode() === 'edit-base' || panelMode() === 'edit-draft'">
+        <div class="annotation-mode-banner-title">{{ panelModeLabel() }}</div>
+        <div class="annotation-mode-banner-text">{{ panelModeDescription() }}</div>
+        @if (isRectGeometryEditable()) {
+          <div class="annotation-mode-banner-tip">
+            Astuce : avec l’outil rectangle actif, fais glisser la BBox courante ou ses poignées pour modifier sa géométrie.
+          </div>
+        }
+      </div>
+
       <div class="form-group" style="margin-bottom:12px;">
         <label class="form-label">Type de défaut</label>
         <select class="form-select" [disabled]="!currentImage()" [ngModel]="annotationType()" (ngModelChange)="updateAnnotationType($event)">
