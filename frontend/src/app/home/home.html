@@ -101,22 +101,34 @@
     </header>
 
     <div class="page" [class.active]="currentPage() === 'accueil'" id="page-home">
-      <app-accueil *ngIf="currentPage() === 'accueil'"></app-accueil>
+      @if (currentPage() === 'accueil') {
+        <app-accueil></app-accueil>
+      }
     </div>
     <div class="page" [class.active]="currentPage() === 'annotation'" id="page-viewer">
-      <app-annotation *ngIf="currentPage() === 'annotation'"></app-annotation>
+      @if (currentPage() === 'annotation') {
+        <app-annotation></app-annotation>
+      }
     </div>
-        <div class="page" [class.active]="currentPage() === 'analyse'" id="page-analysis">
-      <app-analyze *ngIf="currentPage() === 'analyse'"></app-analyze>
+    <div class="page" [class.active]="currentPage() === 'analyse'" id="page-analysis">
+      @if (currentPage() === 'analyse') {
+        <app-analyze></app-analyze>
+      }
     </div>
     <div class="page" [class.active]="currentPage() === 'training'" id="page-training">
-      <app-training *ngIf="currentPage() === 'training'"></app-training>
+      @if (currentPage() === 'training') {
+        <app-training></app-training>
+      }
     </div>
     <div class="page" [class.active]="currentPage() === 'testing'" id="page-testing">
-      <app-testing *ngIf="currentPage() === 'testing'"></app-testing>
+      @if (currentPage() === 'testing') {
+        <app-testing></app-testing>
+      }
     </div>
     <div class="page" [class.active]="currentPage() === 'deployment'" id="page-deployment">
-      <app-deployment *ngIf="currentPage() === 'deployment'"></app-deployment>
+      @if (currentPage() === 'deployment') {
+        <app-deployment></app-deployment>
+      }
     </div>
   </main>
 </div>
