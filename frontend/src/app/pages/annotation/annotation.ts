@@ -225,8 +225,9 @@ interface UndoState {
   draftPolygonCurrent: { points: NormPoint[]; closed: boolean };
   polygonPreview: NormPoint | null;
   draftFreehandCurrent: { points: NormPoint[]; drawing: boolean };
-  kanbanItems: KanbanWorkItem[];
   currentWorkId: string | null;
+  currentWorkItem: KanbanWorkItem | null;
+  backgroundKanbanItems: KanbanWorkItem[];
 }
 
 @Component({
@@ -326,6 +327,9 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
     if (this.imageRenderRect.w === 0) return;
     e.preventDefault();
 
+    this.clearUndoRedoHistory();
+    this.bboxEditState = null;
+
     const delta = -e.deltaY;
     const current = this.zoom();
 
@@ -413,6 +417,12 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
   }
 
   setTool(tool: Tool): void {
+    const changed = this.currentTool() !== tool;
+    if (changed) {
+      this.clearUndoRedoHistory();
+      this.bboxEditState = null;
+    }
+
     this.clearRemoteFeedback();
     this.currentTool.set(tool);
     this.polygonPreview = null;
@@ -455,8 +465,7 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
     next = Math.round(Math.max(20, Math.min(1200, next)));
 
     this.zoom.set(next);
-    this.currentTool.set('pan');
-
+    this.setTool('pan');
     this.drawBaseImage();
     this.drawAnnotationsOnly();
     this.persistWorkspaceState();
@@ -558,10 +567,21 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
   }
 
   openImagePicker(): void {
+    if (!this.canAddMoreImages()) {
+      this.showSaveToast('error', 'Limite de 2 images atteinte.');
+      return;
+    }
     this.fileInput.nativeElement.click();
   }
 
   onFileSelected(event: Event): void {
+    if (!this.canAddMoreImages()) {
+      this.showSaveToast('error', 'Limite de 2 images atteinte.');
+      const inputLimit = event.target as HTMLInputElement;
+      inputLimit.value = '';
+      return;
+    }
+
     const input = event.target as HTMLInputElement;
     const file = input.files?.[0];
     if (!file) return;
@@ -588,7 +608,11 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
 
 
   allImages(): ImageModel[] {
-    return this.imageList();
+    return this.imageList().slice(0, 2);
+  }
+
+  canAddMoreImages(): boolean {
+    return this.imageList().length < 2;
   }
 
   isCurrentImageCard(imageId: string): boolean {
@@ -685,15 +709,16 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
     this.annotationDesc.set('');
     this.imageFileName.set('Aucune image sélectionnée');
     this.imageFileMeta.set('—');
-    this.undoStack = [];
-    this.redoStack = [];
     this.bboxEditState = null;
+    this.clearUndoRedoHistory();
     this.drawBaseImage();
     this.drawAnnotationsOnly();
   }
 
   selectImageById(imageId: string): void {
     this.clearRemoteFeedback();
+    this.clearUndoRedoHistory();
+    this.bboxEditState = null;
     this.persistWorkspaceState();
 
     const state = this.readWorkspaceState();
@@ -784,6 +809,7 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
           this.persistWorkspaceState();
         }
 
+        this.clearUndoRedoHistory();
         this.showSaveToast('success', 'Image supprimée.');
       },
       error: () => {
@@ -797,6 +823,11 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
   }
 
   private registerImageCandidate(file: File, src: string, width: number, height: number): void {
+    if (!this.canAddMoreImages()) {
+      this.showSaveToast('error', 'Limite de 2 images atteinte.');
+      return;
+    }
+
     const candidate: ImageModel = {
       id: this.newImageId('upload'),
       name: file.name,
@@ -966,6 +997,11 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
   }
 
   setCurrentWork(workId: string | null): void {
+    const changed = this.currentWorkId() !== workId;
+    if (changed) {
+      this.clearUndoRedoHistory();
+    }
+
     this.bboxEditState = null;
     this.currentWorkId.set(workId);
     this.syncEditorFromCurrentWork();
@@ -1020,6 +1056,7 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
 
     if (wasCurrent) this.currentWorkId.set(null);
 
+    this.clearUndoRedoHistory();
     this.persistWorkspaceState();
     this.drawAnnotationsOnly();
   }
@@ -1127,9 +1164,13 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
   }
 
   kanbanItemClasses(item: KanbanWorkItem): string {
+    if (item.source === 'base' && !item.dirty) {
+      return 'visual-item visual-item-base-neutral';
+    }
+
     return this.isWorkItemDraftMode(item)
       ? 'visual-item visual-item-draft'
-      : 'visual-item visual-item-base';
+      : 'visual-item visual-item-base-neutral';
   }
 
   private currentHighlightMatchesGeometry(geometry: Geometry, fallbackAnnotationId?: number): boolean {
@@ -1171,6 +1212,7 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
         if (this.hoveredAnnotId() === id) this.hoveredAnnotId.set(null);
         if (wasCurrent) this.currentWorkId.set(null);
         if (wasCurrent) this.bboxEditState = null;
+        this.clearUndoRedoHistory();
 
         this.showSaveToast('success', 'Annotation supprimée.');
         this.persistWorkspaceState();
@@ -1205,6 +1247,8 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
   }
 
   private snapshotState(): UndoState {
+    const currentId = this.currentWorkId();
+
     return JSON.parse(
       JSON.stringify({
         draftShapes: this.draftShapes,
@@ -1212,8 +1256,9 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
         draftPolygonCurrent: this.draftPolygonCurrent,
         polygonPreview: this.polygonPreview,
         draftFreehandCurrent: this.draftFreehandCurrent,
-        kanbanItems: this.kanbanItems(),
-        currentWorkId: this.currentWorkId(),
+        currentWorkId: currentId,
+        currentWorkItem: this.currentWorkItem(),
+        backgroundKanbanItems: this.kanbanItems().filter((item) => item.workId !== currentId),
       } satisfies UndoState),
     ) as UndoState;
   }
@@ -1224,11 +1269,27 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
     this.draftPolygonCurrent = state.draftPolygonCurrent ?? { points: [], closed: false };
     this.polygonPreview = state.polygonPreview ?? null;
     this.draftFreehandCurrent = state.draftFreehandCurrent ?? { points: [], drawing: false };
-    this.kanbanItems.set((state.kanbanItems ?? []).slice().sort((a, b) => a.order - b.order));
-    this.currentWorkId.set(state.currentWorkId ?? null);
-    this.bboxEditState = null;
 
-    this.syncEditorFromCurrentWork();
+    const restoredCurrentId = state.currentWorkId ?? null;
+    const restoredCurrentItem = state.currentWorkItem
+      ? this.cloneGeometry(state.currentWorkItem)
+      : null;
+    const backgroundItems = (state.backgroundKanbanItems ?? []).map((item) => this.cloneGeometry(item));
+
+    const nextItems = restoredCurrentId && restoredCurrentItem
+      ? [...backgroundItems, restoredCurrentItem]
+      : [...backgroundItems];
+
+    this.kanbanItems.set(nextItems.sort((a, b) => a.order - b.order));
+
+    if (restoredCurrentId && restoredCurrentItem) {
+      this.currentWorkId.set(restoredCurrentId);
+      this.syncEditorFromCurrentWork();
+    } else {
+      this.currentWorkId.set(null);
+    }
+
+    this.bboxEditState = null;
     this.drawAnnotationsOnly();
   }
 
@@ -1238,8 +1299,21 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
     if (this.undoStack.length > 80) this.undoStack.shift();
   }
 
+  private clearUndoRedoHistory(): void {
+    this.undoStack = [];
+    this.redoStack = [];
+  }
+
+  private beginShortUndoRedoScope(): void {
+    this.clearUndoRedoHistory();
+  }
+
   undo(): void {
     if (this.undoStack.length === 0) return;
+    if (!this.currentImage()) {
+      this.clearUndoRedoHistory();
+      return;
+    }
 
     const current = this.snapshotState();
     this.redoStack.push(current);
@@ -1253,6 +1327,10 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
 
   redo(): void {
     if (this.redoStack.length === 0) return;
+    if (!this.currentImage()) {
+      this.clearUndoRedoHistory();
+      return;
+    }
 
     const current = this.snapshotState();
     this.undoStack.push(current);
@@ -1283,22 +1361,12 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
     this.panStart = { x: 0, y: 0 };
     this.panStartOffset = { x: 0, y: 0 };
 
-    this.undoStack = [];
-    this.redoStack = [];
     this.bboxEditState = null;
+    this.clearUndoRedoHistory();
   }
 
   resetDrafts(): void {
-    const currentBeforeReset = this.currentWorkItem();
-
-    const hasAnyDraft =
-      this.draftShapes.length > 0 ||
-      this.localDraftWorkItemsCount() > 0 ||
-      !!this.draftRectCurrent?.dragging ||
-      this.draftPolygonCurrent.points.length > 0 ||
-      this.draftFreehandCurrent.drawing;
-
-    if (hasAnyDraft) this.pushHistory();
+    this.clearUndoRedoHistory();
 
     this.clearDraftsNoHistory();
 
@@ -1306,10 +1374,7 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
       items.filter((item) => !(item.source === 'draft' || item.dirty)),
     );
 
-    if (currentBeforeReset && this.isWorkItemDraftMode(currentBeforeReset)) {
-      this.currentWorkId.set(null);
-    }
-
+    this.currentWorkId.set(null);
     this.bboxEditState = null;
     this.clearRemoteFeedback();
     this.persistWorkspaceState();
@@ -1590,6 +1655,8 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
     this.draftShapes = this.draftShapes.filter((draft) => remainingDraftIds.has(draft.id));
     this.syncNextAnnotationId();
     this.currentWorkId.set(null);
+    this.bboxEditState = null;
+    this.clearUndoRedoHistory();
   }
 
   private deletePersistedAnnotationDryRun$(id: number): Observable<DeletePersistedAnnotationResponseDto> {
@@ -2122,11 +2189,17 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
 
     for (const ann of this.imageAnnotations()) {
       const workItem = baseWorkItems.find((item) => item.baseAnnotationId === ann.id);
+
+      const visualClass: 'tag-red' | 'tag-orange' | 'tag-cyan' | 'draft' | 'base-neutral' =
+        workItem
+          ? (workItem.dirty ? 'draft' : 'base-neutral')
+          : ann.scls;
+
       this.drawGeometry(
         ctx,
         workItem?.geometry ?? ann.geometry,
         ann.id,
-        workItem?.meta.scls ?? ann.scls,
+        visualClass,
         workItem?.meta.def ?? ann.def,
         false,
       );
@@ -2163,7 +2236,7 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
     ctx: CanvasRenderingContext2D,
     geometry: Geometry,
     annId: number,
-    sevClass: 'tag-red' | 'tag-orange' | 'tag-cyan' | 'draft',
+    sevClass: 'tag-red' | 'tag-orange' | 'tag-cyan' | 'draft' | 'base-neutral',
     label: string,
     isDraft: boolean,
   ): void {
@@ -2288,8 +2361,9 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
     ctx.restore();
   }
 
-  private getColors(sevClass: 'tag-red' | 'tag-orange' | 'tag-cyan' | 'draft'): { main: string; fill: string } {
+  private getColors(sevClass: 'tag-red' | 'tag-orange' | 'tag-cyan' | 'draft' | 'base-neutral'): { main: string; fill: string } {
     if (sevClass === 'draft') return { main: '#E06C00', fill: 'rgba(224,108,0,0.12)' };
+    if (sevClass === 'base-neutral') return { main: '#9CA3AF', fill: 'rgba(156,163,175,0.16)' };
     if (sevClass === 'tag-red') return { main: '#FF453A', fill: 'rgba(255,69,58,0.2)' };
     if (sevClass === 'tag-orange') return { main: '#FFD60A', fill: 'rgba(255,214,10,0.2)' };
     return { main: '#00C7BE', fill: 'rgba(0,199,190,0.15)' };
@@ -2328,6 +2402,7 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
         const point = this.pixelToNorm(e);
         if (!point) return;
 
+        this.beginShortUndoRedoScope();
         this.pushHistory();
         this.clearRemoteFeedback();
         this.bboxEditState = {
@@ -2365,6 +2440,7 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
     this.drawCanvas?.nativeElement.setPointerCapture?.(e.pointerId);
 
     if (tool === 'rect') {
+      this.beginShortUndoRedoScope();
       this.clearRemoteFeedback();
       this.draftRectCurrent = { start: point, end: point, dragging: true };
       this.persistWorkspaceState();
@@ -2374,6 +2450,10 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
 
     if (tool === 'polygon') {
       if (this.draftPolygonCurrent.closed) return;
+
+      if (this.draftPolygonCurrent.points.length === 0) {
+        this.beginShortUndoRedoScope();
+      }
 
       if (this.draftPolygonCurrent.points.length >= 3) {
         const first = this.draftPolygonCurrent.points[0];
@@ -2411,6 +2491,7 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
       return;
     }
 
+    this.beginShortUndoRedoScope();
     this.clearRemoteFeedback();
     this.pushHistory();
     this.draftFreehandCurrent = { points: [point], drawing: true };
