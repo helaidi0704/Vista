@@ -1151,7 +1151,7 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
   }
 
   saveButtonLabel(): string {
-    return this.hasBaseItemsInKanban() ? 'Mettre à jour' : 'Enregistrer';
+    return 'Enregistrer les modifications';
   }
 
   kanbanBadgeLabel(item: KanbanWorkItem): string {
