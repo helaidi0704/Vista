@@ -32,11 +32,10 @@ def get_s3_client():
 
 
 def get_public_s3_client():
-    """Create a boto3 S3 client using the external IP for presigned URLs."""
-    external_ip = os.environ.get("EXTERNAL_IP", "localhost")
+    """Create a boto3 S3 client using minio internal endpoint for presigned URLs."""
     return boto3.client(
         "s3",
-        endpoint_url=f"http://{external_ip}:9000",
+        endpoint_url="http://minio:9000",
         aws_access_key_id=settings.minio_access_key,
         aws_secret_access_key=settings.minio_secret_key,
         config=BotoConfig(signature_version="s3v4"),
@@ -57,13 +56,18 @@ async def init_buckets():
 
 
 def generate_presigned_url(bucket: str, key: str, expires_in: int = 3600) -> str:
-    """Generate a presigned GET URL using external IP (for browser access)."""
+    """Generate a presigned GET URL routed through nginx HTTPS proxy."""
     s3 = get_public_s3_client()
-    return s3.generate_presigned_url(
+    url = s3.generate_presigned_url(
         "get_object",
         Params={"Bucket": bucket, "Key": key},
         ExpiresIn=expires_in,
     )
+    # Rewrite MinIO URL to HTTPS nginx proxy
+    external_ip = os.environ.get("EXTERNAL_IP", "localhost")
+    url = url.replace(f"http://{external_ip}:9000/", "https://uyunvision.com/s3/")
+    url = url.replace("http://minio:9000/", "https://uyunvision.com/s3/")
+    return url
 
 
 def generate_upload_url(bucket: str, key: str, content_type: str = "image/jpeg", expires_in: int = 3600) -> str:

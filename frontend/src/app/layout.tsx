@@ -13,7 +13,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
   if (isLoginPage) {
     return (
       <html lang="fr">
-        <body className="antialiased">
+        <body style={{minWidth:"1200px"}} className="antialiased">
           <Providers>{children}</Providers>
         </body>
       </html>
@@ -22,7 +22,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
 
   return (
     <html lang="fr">
-      <body className="antialiased">
+      <body style={{minWidth:"1200px"}} className="antialiased">
         <Providers>
           <AuthGuard>
             <div className="flex h-screen overflow-hidden">
