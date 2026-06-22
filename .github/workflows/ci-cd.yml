@@ -59,14 +59,14 @@ jobs:
       # ----------------------
       - name: Build Docker images
         run: |
-          docker-compose --env-file .env -f $DOCKER_COMPOSE_FILE build
+          docker compose --env-file .env -f $DOCKER_COMPOSE_FILE build
 
       # ----------------------
       # RUN CONTAINERS
       # ----------------------
       - name: Run containers
         run: |
-          docker-compose --env-file .env -f $DOCKER_COMPOSE_FILE up -d
+          docker compose --env-file .env -f $DOCKER_COMPOSE_FILE up -d
 
       - name: Check containers
         run: docker ps
@@ -76,7 +76,7 @@ jobs:
       # ----------------------
       - name: Stop containers
         run: |
-          docker-compose -f $DOCKER_COMPOSE_FILE down
+          docker compose -f $DOCKER_COMPOSE_FILE down
 
   deploy:
     name: Deploy désactivé
