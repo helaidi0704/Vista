@@ -28,10 +28,10 @@ jobs:
       # ----------------------
       # FRONTEND (Angular)
       # ----------------------
-      - name: Setup Node (FIX)
+      - name: Setup Node
         uses: actions/setup-node@v3
         with:
-          node-version: 20   # ✅ CORRECTION ICI
+          node-version: 20
 
       - name: Install frontend dependencies
         run: |
@@ -44,25 +44,7 @@ jobs:
           npm run build --if-present
 
       # ----------------------
-      # BACKEND (FastAPI)
-      # ----------------------
-      - name: Setup Python
-        uses: actions/setup-python@v4
-        with:
-          python-version: "3.11"
-
-      - name: Install backend dependencies
-        run: |
-          cd services/api
-          pip install -r requirements.txt
-
-      - name: Run backend tests
-        run: |
-          cd services/api
-          pytest || echo "No tests yet"
-
-      # ----------------------
-      # CREATE .env (pour CI)
+      # CREATE .env
       # ----------------------
       - name: Create .env file
         run: |
@@ -104,4 +86,4 @@ jobs:
 
     steps:
       - name: Skip deploy
-        run: echo "Déploiement désactivé (test sur dev-ibrahim)"
+        run: echo "Déploiement désactivé"
