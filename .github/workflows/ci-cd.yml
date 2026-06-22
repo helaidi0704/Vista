@@ -4,13 +4,10 @@ on:
   push:
     branches:
       - dev-ibrahim
-  pull_request:
-    branches:
-      - dev-ibrahim
   workflow_dispatch:
 
 env:
-  DOCKER_COMPOSE_FILE: infra/docker/docker-compose.yml
+  DOCKER_COMPOSE_FILE: ./infra/infra/docker/docker-compose.yml
 
 jobs:
 
@@ -19,21 +16,18 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      # ----------------------
-      # CHECKOUT
-      # ----------------------
       - name: Checkout repository
         uses: actions/checkout@v3
 
       # ----------------------
-      # FRONTEND (Angular)
+      # FRONTEND
       # ----------------------
       - name: Setup Node
         uses: actions/setup-node@v3
         with:
           node-version: 20
 
-      - name: Install frontend dependencies
+      - name: Install frontend
         run: |
           cd frontend
           npm install --legacy-peer-deps
@@ -44,46 +38,40 @@ jobs:
           npm run build --if-present
 
       # ----------------------
-      # CREATE .env
+      # .env
       # ----------------------
-      - name: Create .env file
+      - name: Create env file
         run: |
           echo "POSTGRES_DB=postgres" >> .env
           echo "POSTGRES_USER=postgres" >> .env
           echo "POSTGRES_PASSWORD=postgres" >> .env
           echo "REDIS_HOST=redis" >> .env
-          echo "API_ENV=ci" >> .env
+
+      # ----------------------
+      # DEBUG (important)
+      # ----------------------
+      - name: Debug paths
+        run: |
+          ls -R
 
       # ----------------------
       # DOCKER BUILD
       # ----------------------
-      - name: Build Docker images
+      - name: Docker build
         run: |
-          docker compose --env-file .env -f $DOCKER_COMPOSE_FILE build
+          docker compose -f $DOCKER_COMPOSE_FILE build
 
       # ----------------------
-      # RUN CONTAINERS
+      # RUN
       # ----------------------
-      - name: Run containers
+      - name: Docker up
         run: |
-          docker compose --env-file .env -f $DOCKER_COMPOSE_FILE up -d
+          docker compose -f $DOCKER_COMPOSE_FILE up -d
 
       - name: Check containers
         run: docker ps
 
-      # ----------------------
-      # STOP CONTAINERS
-      # ----------------------
-      - name: Stop containers
+      - name: Docker down
         run: |
           docker compose -f $DOCKER_COMPOSE_FILE down
 
-  deploy:
-    name: Deploy désactivé
-    runs-on: ubuntu-latest
-
-    if: github.ref == 'refs/heads/develop'
-
-    steps:
-      - name: Skip deploy
-        run: echo "Déploiement désactivé"
