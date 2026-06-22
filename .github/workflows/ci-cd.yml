@@ -72,6 +72,6 @@ jobs:
       - name: Check containers
         run: docker ps
 
-      - name: Docker down
-        run: |
-          docker compose -f $DOCKER_COMPOSE_FILE down
+      #- name: Docker down
+       # run: |
+        #  docker compose -f $DOCKER_COMPOSE_FILE down
