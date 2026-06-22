@@ -16,6 +16,9 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+      # ----------------------
+      # CHECKOUT
+      # ----------------------
       - name: Checkout repository
         uses: actions/checkout@v3
 
@@ -53,17 +56,23 @@ jobs:
       # ----------------------
       - name: Docker build
         run: |
-          docker compose --env-file $ENV_FILE -f $DOCKER_COMPOSE_FILE build
+          docker compose \
+            --env-file $ENV_FILE \
+            -f $DOCKER_COMPOSE_FILE \
+            build
 
       # ----------------------
       # DOCKER UP
       # ----------------------
       - name: Docker up
         run: |
-          docker compose --env-file $ENV_FILE -f $DOCKER_COMPOSE_FILE up -d
+          docker compose \
+            --env-file $ENV_FILE \
+            -f $DOCKER_COMPOSE_FILE \
+            up -d
 
       # ----------------------
-      # ✅ CHECK CONTAINERS (IMPORTANT)
+      # CHECK CONTAINERS
       # ----------------------
       - name: Check containers running
         run: |
@@ -71,28 +80,42 @@ jobs:
           docker ps | grep "Up" || exit 1
 
       # ----------------------
-      # ✅ WAIT (laisser démarrer)
+      # WAIT (plus safe)
       # ----------------------
       - name: Wait for services
-        run: sleep 10
+        run: sleep 20
 
       # ----------------------
-      # ✅ CHECK LOGS (SUPER IMPORTANT)
+      # LOGS
       # ----------------------
       - name: Show logs
         run: |
-          docker compose -f $DOCKER_COMPOSE_FILE logs
+          docker compose \
+            --env-file $ENV_FILE \
+            -f $DOCKER_COMPOSE_FILE \
+            logs
 
       # ----------------------
-      # ✅ TEST API (si exposée)
+      # TEST API (strict)
       # ----------------------
       - name: Test API
         run: |
-          curl -f http://localhost:8000 || echo "API not reachable"
+          curl -f http://localhost:8000
+
+      # ----------------------
+      # TEST FRONT
+      # ----------------------
+      - name: Test Frontend
+        run: |
+          curl -f http://localhost:4200
 
       # ----------------------
       # CLEAN
       # ----------------------
       - name: Docker down
+        if: always()
         run: |
-          docker compose -f $DOCKER_COMPOSE_FILE down
+          docker compose \
+            --env-file $ENV_FILE \
+            -f $DOCKER_COMPOSE_FILE \
+            down
