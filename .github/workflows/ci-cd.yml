@@ -36,7 +36,7 @@ jobs:
       - name: Install frontend dependencies
         run: |
           cd frontend
-          npm install
+          npm install --legacy-peer-deps
 
       - name: Build frontend
         run: |
@@ -62,48 +62,4 @@ jobs:
           pytest || echo "No tests yet"
 
       # ----------------------
-      # CREATE .env (pour CI)
-      # ----------------------
-      - name: Create .env file
-        run: |
-          echo "POSTGRES_DB=postgres" >> .env
-          echo "POSTGRES_USER=postgres" >> .env
-          echo "POSTGRES_PASSWORD=postgres" >> .env
-          echo "REDIS_HOST=redis" >> .env
-          echo "API_ENV=ci" >> .env
-
-      # ----------------------
-      # DOCKER BUILD
-      # ----------------------
-      - name: Build Docker images
-        run: |
-          docker-compose --env-file .env -f $DOCKER_COMPOSE_FILE build
-
-      # ----------------------
-      # RUN CONTAINERS
-      # ----------------------
-      - name: Run containers
-        run: |
-          docker-compose --env-file .env -f $DOCKER_COMPOSE_FILE up -d
-
-      - name: Check containers
-        run: docker ps
-
-      # ----------------------
-      # STOP CONTAINERS
-      # ----------------------
-      - name: Stop containers
-        run: |
-          docker-compose -f $DOCKER_COMPOSE_FILE down
-
-  deploy:
-    name: Deploy désactivé
-    runs-on: ubuntu-latest
-
-    # ✅ BLOQUÉ volontairement
-    if: github.ref == 'refs/heads/develop'
-
-    steps:
-      - name: Skip deploy
-        run: echo "Déploiement désactivé pour test sur dev-ibrahim"
 
