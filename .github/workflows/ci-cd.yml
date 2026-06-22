@@ -38,21 +38,22 @@ jobs:
           npm run build --if-present
 
       # ----------------------
-      # .env
+      # CREATE ENV (FIX FINAL ✅)
       # ----------------------
-      - name: Create env file
+      - name: Create env file in infra/infra/
         run: |
-          echo "POSTGRES_DB=postgres" >> .env
-          echo "POSTGRES_USER=postgres" >> .env
-          echo "POSTGRES_PASSWORD=postgres" >> .env
-          echo "REDIS_HOST=redis" >> .env
+          mkdir -p infra/infra
+          echo "DB_NAME=postgres" >> infra/infra/.env
+          echo "DB_USER=postgres" >> infra/infra/.env
+          echo "DB_PASSWORD=postgres" >> infra/infra/.env
+          echo "DB_PORT=5432" >> infra/infra/.env
 
       # ----------------------
-      # DEBUG (important)
+      # DEBUG
       # ----------------------
       - name: Debug paths
         run: |
-          ls -R
+          ls -R infra
 
       # ----------------------
       # DOCKER BUILD
@@ -74,4 +75,3 @@ jobs:
       - name: Docker down
         run: |
           docker compose -f $DOCKER_COMPOSE_FILE down
-
