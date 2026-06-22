@@ -28,10 +28,10 @@ jobs:
       # ----------------------
       # FRONTEND (Angular)
       # ----------------------
-      - name: Setup Node
+      - name: Setup Node (FIX)
         uses: actions/setup-node@v3
         with:
-          node-version: 18
+          node-version: 20   # ✅ CORRECTION ICI
 
       - name: Install frontend dependencies
         run: |
@@ -62,4 +62,46 @@ jobs:
           pytest || echo "No tests yet"
 
       # ----------------------
+      # CREATE .env (pour CI)
+      # ----------------------
+      - name: Create .env file
+        run: |
+          echo "POSTGRES_DB=postgres" >> .env
+          echo "POSTGRES_USER=postgres" >> .env
+          echo "POSTGRES_PASSWORD=postgres" >> .env
+          echo "REDIS_HOST=redis" >> .env
+          echo "API_ENV=ci" >> .env
 
+      # ----------------------
+      # DOCKER BUILD
+      # ----------------------
+      - name: Build Docker images
+        run: |
+          docker-compose --env-file .env -f $DOCKER_COMPOSE_FILE build
+
+      # ----------------------
+      # RUN CONTAINERS
+      # ----------------------
+      - name: Run containers
+        run: |
+          docker-compose --env-file .env -f $DOCKER_COMPOSE_FILE up -d
+
+      - name: Check containers
+        run: docker ps
+
+      # ----------------------
+      # STOP CONTAINERS
+      # ----------------------
+      - name: Stop containers
+        run: |
+          docker-compose -f $DOCKER_COMPOSE_FILE down
+
+  deploy:
+    name: Deploy désactivé
+    runs-on: ubuntu-latest
+
+    if: github.ref == 'refs/heads/develop'
+
+    steps:
+      - name: Skip deploy
+        run: echo "Déploiement désactivé (test sur dev-ibrahim)"
