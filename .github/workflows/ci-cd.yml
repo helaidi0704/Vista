@@ -8,6 +8,7 @@ on:
 
 env:
   DOCKER_COMPOSE_FILE: ./infra/infra/docker/docker-compose.yml
+  ENV_FILE: ./infra/infra/.env
 
 jobs:
 
@@ -38,36 +39,36 @@ jobs:
           npm run build --if-present
 
       # ----------------------
-      # CREATE ENV (FIX FINAL ✅)
+      # CREATE ENV ✅
       # ----------------------
-      - name: Create env file in infra/infra/
+      - name: Create env file
         run: |
           mkdir -p infra/infra
-          echo "DB_NAME=postgres" >> infra/infra/.env
-          echo "DB_USER=postgres" >> infra/infra/.env
-          echo "DB_PASSWORD=postgres" >> infra/infra/.env
-          echo "DB_PORT=5432" >> infra/infra/.env
+          echo "DB_NAME=postgres" > $ENV_FILE
+          echo "DB_USER=postgres" >> $ENV_FILE
+          echo "DB_PASSWORD=postgres" >> $ENV_FILE
+          echo "DB_PORT=5432" >> $ENV_FILE
 
       # ----------------------
       # DEBUG
       # ----------------------
-      - name: Debug paths
+      - name: Debug env
         run: |
-          ls -R infra
+          cat $ENV_FILE
 
       # ----------------------
       # DOCKER BUILD
       # ----------------------
       - name: Docker build
         run: |
-          docker compose -f $DOCKER_COMPOSE_FILE build
+          docker compose --env-file $ENV_FILE -f $DOCKER_COMPOSE_FILE build
 
       # ----------------------
       # RUN
       # ----------------------
       - name: Docker up
         run: |
-          docker compose -f $DOCKER_COMPOSE_FILE up -d
+          docker compose --env-file $ENV_FILE -f $DOCKER_COMPOSE_FILE up -d
 
       - name: Check containers
         run: docker ps
