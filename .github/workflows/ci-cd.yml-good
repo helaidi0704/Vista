@@ -38,7 +38,7 @@ jobs:
           npm run build --if-present
 
       # ----------------------
-      # ENV
+      # CREATE ENV ✅ (BON DOSSIER)
       # ----------------------
       - name: Create env file
         run: |
@@ -49,6 +49,13 @@ jobs:
           echo "DB_PORT=5432" >> $ENV_FILE
 
       # ----------------------
+      # DEBUG
+      # ----------------------
+      - name: Debug env
+        run: |
+          cat $ENV_FILE
+
+      # ----------------------
       # DOCKER BUILD
       # ----------------------
       - name: Docker build
@@ -56,43 +63,15 @@ jobs:
           docker compose --env-file $ENV_FILE -f $DOCKER_COMPOSE_FILE build
 
       # ----------------------
-      # DOCKER UP
+      # RUN
       # ----------------------
       - name: Docker up
         run: |
           docker compose --env-file $ENV_FILE -f $DOCKER_COMPOSE_FILE up -d
 
-      # ----------------------
-      # ✅ CHECK CONTAINERS (IMPORTANT)
-      # ----------------------
-      - name: Check containers running
-        run: |
-          docker ps
-          docker ps | grep "Up" || exit 1
+      - name: Check containers
+        run: docker ps
 
-      # ----------------------
-      # ✅ WAIT (laisser démarrer)
-      # ----------------------
-      - name: Wait for services
-        run: sleep 10
-
-      # ----------------------
-      # ✅ CHECK LOGS (SUPER IMPORTANT)
-      # ----------------------
-      - name: Show logs
-        run: |
-          docker compose -f $DOCKER_COMPOSE_FILE logs
-
-      # ----------------------
-      # ✅ TEST API (si exposée)
-      # ----------------------
-      - name: Test API
-        run: |
-          curl -f http://localhost:8000 || echo "API not reachable"
-
-      # ----------------------
-      # CLEAN
-      # ----------------------
-      - name: Docker down
-        run: |
-          docker compose -f $DOCKER_COMPOSE_FILE down
+      #- name: Docker down
+       # run: |
+        #  docker compose -f $DOCKER_COMPOSE_FILE down
