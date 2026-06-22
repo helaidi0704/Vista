@@ -1,5 +1,4 @@
 <div class="fade-in">
-  <!-- File picker row -->
   <div style="display:flex;gap:12px;align-items:center;margin-bottom:20px;flex-wrap:wrap;">
     <div class="card" style="flex:1;min-width:260px;padding:14px 18px;display:flex;align-items:center;gap:12px;">
       <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="2">
@@ -14,7 +13,7 @@
       <span class="tag tag-orange">À Inspecter</span>
     </div>
 
-    <button class="btn btn-secondary" type="button" (click)="openImagePicker()">
+    <button class="btn btn-secondary top-add-image-button" type="button" [disabled]="!canAddMoreImages()" (click)="openImagePicker()">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
         <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M17 8l-5-5-5 5M12 3v12"></path>
       </svg>
@@ -25,14 +24,44 @@
     <button class="btn btn-secondary" type="button">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
         <rect x="2" y="2" width="20" height="20" rx="2"></rect>
+
         <line x1="8" y1="12" x2="16" y2="12"></line>
       </svg>
       Bibliothèque
     </button>
   </div>
 
+  @if (allImages().length > 0) {
+    <div class="image-kanban-card-shell">
+      <div class="image-kanban-scroll">
+        @for (img of allImages(); track img.id) {
+          <button
+            type="button"
+            [ngClass]="imageCardClasses(img)"
+            [class.is-current]="isCurrentImageCard(img.id)"
+            [style.background-image]="'linear-gradient(rgba(8,10,20,0.42), rgba(8,10,20,0.68)), url(' + img.src + ')'"
+            (click)="selectImageById(img.id)">
+            <span class="image-kanban-top">
+              <span class="image-kanban-icon" [attr.title]="imageCardStatus(img.id)">{{ imageCardIcon(img.id) }}</span>
+              <span
+                class="image-kanban-remove danger-icon-button"
+                role="button"
+                tabindex="0"
+                aria-label="Supprimer l'image"
+                (click)="requestDeleteImage(img.id, $event)">×</span>
+            </span>
+
+            <span class="image-kanban-name">{{ imageCardName(img) }}</span>
+            <span class="image-kanban-counts">{{ imageCardCounts(img.id) }}</span>
+          </button>
+        }
+      </div>
+    </div>
+  } @else {
+    <div class="image-kanban-empty">Aucune image chargée.</div>
+  }
+
   <div class="grid-3">
-    <!-- Image Canvas Area (Span 2) -->
     <div class="card col-span-2" style="display:flex;flex-direction:column;">
       <div class="card-header">
         <span class="card-title">
@@ -43,13 +72,15 @@
         </span>
 
         <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
-          <button class="btn btn-sm"
-                  type="button"
-                  [class.btn-primary]="currentTool() === 'pan'"
-                  [class.btn-secondary]="currentTool() !== 'pan'"
-                  (click)="setTool('pan')"
-                  title="Hand (Pan)"
-                  aria-label="Hand (Pan)">
+          <button
+            class="btn btn-sm"
+            type="button"
+            [class.btn-primary]="currentTool() === 'pan'"
+            [class.btn-secondary]="currentTool() !== 'pan'"
+            [disabled]="!currentImage()"
+            (click)="setTool('pan')"
+            title="Hand (Pan)"
+            aria-label="Hand (Pan)">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
                  stroke-linecap="round" stroke-linejoin="round">
               <path d="M18 11V7a2 2 0 0 0-4 0v4"></path>
@@ -59,23 +90,27 @@
             </svg>
           </button>
 
-          <button class="btn btn-sm"
-                  type="button"
-                  [class.btn-primary]="currentTool() === 'rect'"
-                  [class.btn-secondary]="currentTool() !== 'rect'"
-                  (click)="setTool('rect')"
-                  title="BBox (Rectangle)">
+          <button
+            class="btn btn-sm"
+            type="button"
+            [class.btn-primary]="currentTool() === 'rect'"
+            [class.btn-secondary]="currentTool() !== 'rect'"
+            [disabled]="!currentImage()"
+            (click)="setTool('rect')"
+            title="BBox (Rectangle)">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <rect x="3" y="3" width="18" height="18" rx="2"></rect>
             </svg>
           </button>
 
-          <button class="btn btn-sm"
-                  type="button"
-                  [class.btn-primary]="currentTool() === 'polygon'"
-                  [class.btn-secondary]="currentTool() !== 'polygon'"
-                  (click)="setTool('polygon')"
-                  title="Polygon (points)">
+          <button
+            class="btn btn-sm"
+            type="button"
+            [class.btn-primary]="currentTool() === 'polygon'"
+            [class.btn-secondary]="currentTool() !== 'polygon'"
+            [disabled]="!currentImage()"
+            (click)="setTool('polygon')"
+            title="Polygon (points)">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <path d="M5 6l5-3 7 4 2 8-6 5-8-4-1-10z"></path>
               <circle cx="5" cy="6" r="1" fill="currentColor"></circle>
@@ -84,12 +119,14 @@
             </svg>
           </button>
 
-          <button class="btn btn-sm"
-                  type="button"
-                  [class.btn-primary]="currentTool() === 'freehand'"
-                  [class.btn-secondary]="currentTool() !== 'freehand'"
-                  (click)="setTool('freehand')"
-                  title="Tracé Libre (Crayon)">
+          <button
+            class="btn btn-sm"
+            type="button"
+            [class.btn-primary]="currentTool() === 'freehand'"
+            [class.btn-secondary]="currentTool() !== 'freehand'"
+            [disabled]="!currentImage()"
+            (click)="setTool('freehand')"
+            title="Tracé Libre (Crayon)">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <path d="M3 17c3-6 6-8 9-8 2.5 0 3.5 2.5 5 2.5 1.5 0 2-1.5 4-4.5"></path>
               <path d="M3 21c3-2 6-3 10-3"></path>
@@ -97,33 +134,41 @@
           </button>
 
           <div style="width:1px;height:20px;background:var(--border);margin:0 4px;"></div>
-          <span style="font-size:11px;color:var(--text-muted);">Zoom: {{ zoom() }}%</span>
+          <span style="font-size:11px;color:var(--text-muted);" title="Double-cliquer pour réinitialiser le zoom" (dblclick)="resetZoom()">Zoom: {{ zoom() }}%</span>
           <input
             type="range"
             min="20"
             max="1200"
             step="5"
+            [disabled]="!currentImage()"
             [value]="zoom()"
             (input)="updateZoom($event)"
             style="width:80px;accent-color:var(--accent);"
           />
 
-          <button class="btn btn-sm btn-secondary" type="button" (click)="resetDrafts()">Reset</button>
+          <button class="btn btn-sm btn-secondary" type="button" [disabled]="!currentImage()" (click)="resetDrafts()">Reset</button>
         </div>
       </div>
 
-      <!-- Canvas Container -->
-      <div class="viz-placeholder"
-           style="flex:1;min-height:380px;position:relative;overflow:hidden;background:#0D0E1A;"
-           [style.cursor]="cursorStyle()"
-           tabindex="0"
-           id="image-container">
-        <canvas #imageCanvas style="position:absolute;top:0;left:0;"></canvas>
-        <canvas #drawCanvas style="position:absolute;top:0;left:0;"></canvas>
+      <div
+        class="viz-placeholder"
+        style="flex:1;min-height:380px;position:relative;overflow:hidden;background:#0D0E1A;"
+        [style.cursor]="cursorStyle()"
+        tabindex="0"
+        id="image-container">
+        @if (currentImage()) {
+          <canvas #imageCanvas style="position:absolute;top:0;left:0;"></canvas>
+          <canvas #drawCanvas style="position:absolute;top:0;left:0;"></canvas>
+        } @else {
+          <div class="no-image-placeholder">
+            <div class="no-image-placeholder-icon">🖼</div>
+            <div class="no-image-placeholder-title">Aucune image sélectionnée</div>
+            <div class="no-image-placeholder-subtitle">Importez une image ou sélectionnez-en une dans la barre du haut.</div>
+          </div>
+        }
       </div>
     </div>
 
-    <!-- Annotation Panel -->
     <div class="card" style="display:flex;flex-direction:column;">
       <div class="card-header">
         <span class="card-title">
@@ -134,42 +179,104 @@
         </span>
       </div>
 
+      <div class="annotation-mode-banner" [class.is-edit]="panelMode() === 'edit-base' || panelMode() === 'edit-draft'">
+        <div class="annotation-mode-banner-title">{{ panelModeLabel() }}</div>
+        <div class="annotation-mode-banner-text">{{ panelModeDescription() }}</div>
+        @if (isRectGeometryEditable()) {
+          <div class="annotation-mode-banner-tip">
+            Astuce : avec l’outil rectangle actif, fais glisser la BBox courante ou ses poignées pour modifier sa géométrie.
+          </div>
+        }
+      </div>
+
       <div class="form-group" style="margin-bottom:12px;">
         <label class="form-label">Type de défaut</label>
-        <select class="form-select" [ngModel]="annotationType()" (ngModelChange)="updateAnnotationType($event)">
-          <option *ngFor="let option of defectOptions" [ngValue]="option">{{ option }}</option>
+        <select class="form-select" [disabled]="!currentImage()" [ngModel]="annotationType()" (ngModelChange)="updateAnnotationType($event)">
+          @for (option of defectOptions; track option) {
+            <option [ngValue]="option">{{ option }}</option>
+          }
         </select>
       </div>
 
       <div class="form-group" style="margin-bottom:12px;">
         <label class="form-label">Sévérité du défaut</label>
         <div style="display:flex;gap:8px;flex-wrap:wrap;">
-          <button class="btn btn-sm"
-                  type="button"
-                  [class.btn-danger]="selectedSeverity() === 'Critique'"
-                  [class.btn-secondary]="selectedSeverity() !== 'Critique'"
-                  (click)="setSeverity('Critique')">Critique</button>
+          <button
+            class="btn btn-sm"
+            type="button"
+            [class.btn-danger]="selectedSeverity() === 'Critique'"
+            [class.btn-secondary]="selectedSeverity() !== 'Critique'"
+            [disabled]="!currentImage()"
+            (click)="setSeverity('Critique')">Critique</button>
 
-          <button class="btn btn-sm"
-                  type="button"
-                  [class.btn-orange]="selectedSeverity() === 'Majeur'"
-                  [class.btn-secondary]="selectedSeverity() !== 'Majeur'"
-                  (click)="setSeverity('Majeur')">Majeur</button>
+          <button
+            class="btn btn-sm"
+            type="button"
+            [class.btn-orange]="selectedSeverity() === 'Majeur'"
+            [class.btn-secondary]="selectedSeverity() !== 'Majeur'"
+            [disabled]="!currentImage()"
+            (click)="setSeverity('Majeur')">Majeur</button>
 
-          <button class="btn btn-sm"
-                  type="button"
-                  [class.btn-success]="selectedSeverity() === 'Mineur'"
-                  [class.btn-secondary]="selectedSeverity() !== 'Mineur'"
-                  (click)="setSeverity('Mineur')">Mineur</button>
+          <button
+            class="btn btn-sm"
+            type="button"
+            [class.btn-success]="selectedSeverity() === 'Mineur'"
+            [class.btn-secondary]="selectedSeverity() !== 'Mineur'"
+            [disabled]="!currentImage()"
+            (click)="setSeverity('Mineur')">Mineur</button>
         </div>
       </div>
 
       <div class="form-group" style="margin-bottom:12px;">
         <label class="form-label">Description détaillée contextuelle</label>
-        <textarea class="form-textarea"
-                  [ngModel]="annotationDesc()"
-                  (ngModelChange)="updateAnnotationDesc($event)"
-                  placeholder="Ex: Rayure longitudinale causée par un frottement outil sur l'axe X..."></textarea>
+        <textarea
+          class="form-textarea"
+          [disabled]="!currentImage()"
+          [ngModel]="annotationDesc()"
+          (ngModelChange)="updateAnnotationDesc($event)"
+          placeholder="Ex: Rayure longitudinale causée par un frottement outil sur l'axe X..."></textarea>
+      </div>
+
+      <div class="form-group" style="margin-bottom:16px;">
+        <label class="form-label">Visuel</label>
+
+        <div class="visual-board">
+          @if (kanbanItems().length > 0) {
+            <div class="visual-grid">
+              @for (item of kanbanItems(); track item.workId) {
+                <button
+                  type="button"
+                  [ngClass]="kanbanItemClasses(item)"
+                  [class.is-current]="isKanbanCurrent(item.workId)"
+                  (click)="setCurrentWork(item.workId)">
+                  <span class="visual-item-top">
+                    <span class="visual-item-badge">{{ kanbanBadgeLabel(item) }}</span>
+
+                    <span class="visual-item-icons">
+                      @if (item.source === 'base') {
+                        <span title="Base">🗄</span>
+                      }
+                      @if (item.source === 'draft' || item.dirty) {
+                        <span title="Brouillon">✎</span>
+                      }
+                    </span>
+
+                    <span
+                      class="visual-item-remove danger-icon-button"
+                      role="button"
+                      tabindex="0"
+                      aria-label="Retirer du visuel"
+                      (click)="removeKanbanItem(item.workId); $event.stopPropagation()">×</span>
+                  </span>
+
+                  <span class="visual-item-label">{{ kanbanSecondaryLabel(item) }}</span>
+                </button>
+              }
+            </div>
+          } @else {
+            <div class="visual-empty">Aucun élément dans le visuel.</div>
+          }
+        </div>
       </div>
 
       <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px;">
@@ -177,18 +284,22 @@
         <span class="tag tag-cyan">{{ imageAnnotations().length }} sauvegardée(s)</span>
       </div>
 
-      <button class="btn btn-primary" style="width:100%;margin-top:auto;" type="button" (click)="saveAnnotation()">
+      <button
+        class="btn btn-primary"
+        style="width:100%;margin-top:auto;"
+        type="button"
+        [disabled]="isSavingRemote() || !currentImage()"
+        (click)="saveToBackend()">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14">
           <path d="M19 21H5a2 2 0 01-2-2V5a2 2 0 012-2h11l5 5v11a2 2 0 01-2 2z"></path>
           <polyline points="17 21 17 13 7 13 7 21"></polyline>
           <polyline points="7 3 7 8 15 8"></polyline>
         </svg>
-        Enregistrer les annotations
+        {{ isSavingRemote() ? 'Envoi...' : saveButtonLabel() }}
       </button>
     </div>
   </div>
 
-  <!-- Annotation history / Objects list -->
   <div class="card" style="margin-top:16px;">
     <div class="card-header">
       <span class="card-title">
@@ -203,38 +314,71 @@
       </span>
     </div>
 
-    <table style="width:100%;border-collapse:collapse;font-size:12px;">
-      <thead>
-      <tr style="color:var(--text-muted);">
-        <th style="text-align:left;padding:8px 12px;border-bottom:1px solid var(--border);">Type de Forme</th>
-        <th style="padding:8px 12px;border-bottom:1px solid var(--border);">Classe (Défaut)</th>
-        <th style="padding:8px 12px;border-bottom:1px solid var(--border);">Sévérité</th>
-        <th style="text-align:left;padding:8px 12px;border-bottom:1px solid var(--border);">Description textuelle</th>
-        <th style="padding:8px 12px;border-bottom:1px solid var(--border);">Action</th>
-      </tr>
-      </thead>
+    @if (currentImage()) {
+      <table style="width:100%;border-collapse:collapse;font-size:12px;">
+        <thead>
+          <tr style="color:var(--text-muted);">
+            <th style="text-align:left;padding:8px 12px;border-bottom:1px solid var(--border);">Type de Forme</th>
+            <th style="padding:8px 12px;border-bottom:1px solid var(--border);">Classe (Défaut)</th>
+            <th style="padding:8px 12px;border-bottom:1px solid var(--border);">Sévérité</th>
+            <th style="text-align:left;padding:8px 12px;border-bottom:1px solid var(--border);">Description textuelle</th>
+            <th style="padding:8px 12px;border-bottom:1px solid var(--border);">Action</th>
+          </tr>
+        </thead>
 
-      <tbody>
-      <tr *ngFor="let ann of imageAnnotations(); trackBy: trackAnnotationById"
-          style="border-bottom:1px solid var(--border); transition:background 0.2s; cursor:pointer;"
-          [style.background]="ann.id === hoveredAnnotId() ? 'var(--bg-card-hover)' : 'transparent'"
-          (mouseenter)="hoverAnnotation(ann.id, true)"
-          (mouseleave)="hoverAnnotation(ann.id, false)">
-        <td style="padding:10px 12px;color:var(--cyan);font-family:monospace;">{{ ann.shape }}</td>
-        <td style="padding:10px 12px;text-align:center;">
-          <span style="color:var(--text-primary);font-weight:600;">{{ ann.def }}</span>
-        </td>
-        <td style="padding:10px 12px;text-align:center;">
-          <span class="tag" [ngClass]="ann.scls">{{ ann.sev }}</span>
-        </td>
-        <td style="padding:10px 12px;color:var(--text-secondary);max-width:320px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">
-          {{ ann.desc }}
-        </td>
-        <td style="padding:10px 12px;text-align:center;">
-          <button class="btn btn-sm btn-danger" type="button" (click)="deleteAnnotation(ann.id); $event.stopPropagation()">🗑</button>
-        </td>
-      </tr>
-      </tbody>
-    </table>
+        <tbody>
+          @for (ann of imageAnnotations(); track ann.id) {
+            <tr
+              style="border-bottom:1px solid var(--border); transition:background 0.2s; cursor:pointer;"
+              [style.background]="isBaseRowCurrent(ann.id) || hoveredAnnotId() === ann.id ? 'var(--bg-card-hover)' : 'transparent'"
+              (mouseenter)="hoverAnnotation(ann.id, true)"
+              (mouseleave)="hoverAnnotation(ann.id, false)"
+              (click)="editAnnotation(ann.id)">
+              <td style="padding:10px 12px;color:var(--cyan);font-family:monospace;">{{ ann.shape }}</td>
+              <td style="padding:10px 12px;text-align:center;">
+                <span style="color:var(--text-primary);font-weight:600;">{{ ann.def }}</span>
+              </td>
+              <td style="padding:10px 12px;text-align:center;">
+                <span class="tag" [ngClass]="ann.scls">{{ ann.sev }}</span>
+              </td>
+              <td style="padding:10px 12px;color:var(--text-secondary);max-width:320px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">
+                {{ ann.desc }}
+              </td>
+              <td style="padding:10px 12px;text-align:center;">
+                <button
+                  class="btn btn-sm btn-danger danger-icon-button"
+                  type="button"
+                  (click)="deletePersistedAnnotation(ann.id); $event.stopPropagation()">
+                  🗑
+                </button>
+              </td>
+            </tr>
+          }
+        </tbody>
+      </table>
+    } @else {
+      <div class="table-empty-state">Aucune image sélectionnée.</div>
+    }
   </div>
+
+  @if (saveToast().visible) {
+    <div
+      class="vista-toast"
+      [class.is-success]="saveToast().kind === 'success'"
+      [class.is-error]="saveToast().kind === 'error'"
+      role="status"
+      aria-live="polite">
+      <div class="vista-toast-icon" aria-hidden="true">
+        @if (saveToast().kind === 'success') {
+          <span>✔</span>
+        } @else {
+          <span>!</span>
+        }
+      </div>
+
+      <div class="vista-toast-content">
+        {{ saveToast().message }}
+      </div>
+    </div>
+  }
 </div>
