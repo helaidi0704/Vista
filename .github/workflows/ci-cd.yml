@@ -8,12 +8,11 @@ on:
 
 env:
   DOCKER_COMPOSE_FILE: ./infra/infra/docker/docker-compose.yml
-  ENV_FILE: ./infra/infra/.env
+  ENV_FILE: ./infra/.env
 
 jobs:
 
   ci:
-    name: Build & Test
     runs-on: ubuntu-latest
 
     steps:
@@ -39,11 +38,11 @@ jobs:
           npm run build --if-present
 
       # ----------------------
-      # CREATE ENV ✅
+      # CREATE ENV ✅ (BON DOSSIER)
       # ----------------------
       - name: Create env file
         run: |
-          mkdir -p infra/infra
+          mkdir -p infra
           echo "DB_NAME=postgres" > $ENV_FILE
           echo "DB_USER=postgres" >> $ENV_FILE
           echo "DB_PASSWORD=postgres" >> $ENV_FILE
