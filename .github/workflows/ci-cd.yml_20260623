@@ -18,22 +18,19 @@ jobs:
     steps:
 
       # ----------------------
-      # CHECKOUT ✅ (v4)
+      # CHECKOUT
       # ----------------------
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v3
 
       # ----------------------
-      # NODE ✅ (v4)
+      # FRONTEND BUILD
       # ----------------------
       - name: Setup Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v3
         with:
           node-version: 20
 
-      # ----------------------
-      # FRONTEND
-      # ----------------------
       - name: Install frontend
         run: |
           cd frontend
@@ -76,13 +73,20 @@ jobs:
             up -d
 
       # ----------------------
-      # WAIT
+      # WAIT SERVICES
       # ----------------------
       - name: Wait for services
         run: sleep 30
 
       # ----------------------
-      # LOGS
+      # CHECK CONTAINERS
+      # ----------------------
+      - name: Check containers running
+        run: |
+          docker ps
+
+      # ----------------------
+      # DEBUG LOGS
       # ----------------------
       - name: Show logs
         run: |
@@ -95,16 +99,18 @@ jobs:
       # TEST API
       # ----------------------
       - name: Test API
-        run: curl -f http://localhost:8000
+        run: |
+          curl -f http://localhost:8000
 
       # ----------------------
-      # TEST FRONT
+      # TEST FRONTEND
       # ----------------------
       - name: Test Frontend
-        run: curl -f http://localhost:4200
+        run: |
+          curl -f http://localhost:4200
 
       # ----------------------
-      # PLAYWRIGHT TESTS 🔥
+      # 🔥 PLAYWRIGHT TESTS (IMPORTANT)
       # ----------------------
       - name: Run Playwright tests
         run: |
@@ -123,4 +129,3 @@ jobs:
             --env-file $ENV_FILE \
             -f $DOCKER_COMPOSE_FILE \
             down -v
-
