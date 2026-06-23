@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - dev-ibrahim
+      - develop
   workflow_dispatch:
 
 env:
