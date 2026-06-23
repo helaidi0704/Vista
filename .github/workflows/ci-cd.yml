@@ -16,6 +16,7 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+
       # ----------------------
       # CHECKOUT
       # ----------------------
@@ -23,7 +24,7 @@ jobs:
         uses: actions/checkout@v3
 
       # ----------------------
-      # FRONTEND
+      # FRONTEND BUILD
       # ----------------------
       - name: Setup Node
         uses: actions/setup-node@v3
@@ -72,21 +73,20 @@ jobs:
             up -d
 
       # ----------------------
+      # WAIT SERVICES
+      # ----------------------
+      - name: Wait for services
+        run: sleep 30
+
+      # ----------------------
       # CHECK CONTAINERS
       # ----------------------
       - name: Check containers running
         run: |
           docker ps
-          docker ps | grep "Up" || exit 1
 
       # ----------------------
-      # WAIT (plus safe)
-      # ----------------------
-      - name: Wait for services
-        run: sleep 20
-
-      # ----------------------
-      # LOGS
+      # DEBUG LOGS
       # ----------------------
       - name: Show logs
         run: |
@@ -96,18 +96,28 @@ jobs:
             logs
 
       # ----------------------
-      # TEST API (strict)
+      # TEST API
       # ----------------------
       - name: Test API
         run: |
           curl -f http://localhost:8000
 
       # ----------------------
-      # TEST FRONT
+      # TEST FRONTEND
       # ----------------------
       - name: Test Frontend
         run: |
           curl -f http://localhost:4200
+
+      # ----------------------
+      # 🔥 PLAYWRIGHT TESTS (IMPORTANT)
+      # ----------------------
+      - name: Run Playwright tests
+        run: |
+          docker compose \
+            --env-file $ENV_FILE \
+            -f $DOCKER_COMPOSE_FILE \
+            run playwright
 
       # ----------------------
       # CLEAN
@@ -118,4 +128,4 @@ jobs:
           docker compose \
             --env-file $ENV_FILE \
             -f $DOCKER_COMPOSE_FILE \
-            down
+            down -v
