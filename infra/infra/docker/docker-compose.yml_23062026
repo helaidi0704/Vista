@@ -1,5 +1,3 @@
-version: "3.9"
-
 services:
 
   # ========================
@@ -7,7 +5,6 @@ services:
   # ========================
   db:
     image: postgres:15
-    container_name: docker-db-1
     env_file:
       - ../../.env
     environment:
@@ -16,19 +13,19 @@ services:
       POSTGRES_DB: ${DB_NAME}
     ports:
       - "${DB_PORT}:5432"
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${DB_USER} -d ${DB_NAME}"]
       interval: 5s
+      timeout: 5s
       retries: 10
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
 
   # ========================
   # REDIS
   # ========================
   redis:
     image: redis:7
-    container_name: docker-redis-1
     ports:
       - "6379:6379"
 
@@ -39,7 +36,6 @@ services:
     build:
       context: ../../..
       dockerfile: infra/infra/docker/Dockerfile.api
-    container_name: docker-api-1
     env_file:
       - ../../.env
     environment:
@@ -49,6 +45,8 @@ services:
         condition: service_healthy
     ports:
       - "8000:8000"
+    volumes:
+      - ../../apps/api:/app/apps/api
 
   # ========================
   # FRONTEND (Angular)
@@ -57,47 +55,40 @@ services:
     build:
       context: ../../..
       dockerfile: infra/infra/docker/Dockerfile.ui
-    container_name: docker-ui-1
-    working_dir: /app/frontend
     ports:
       - "4200:4200"
+    working_dir: /app
     depends_on:
       - api
-    command: >
-      sh -c "
-        echo '📦 Installing frontend deps...' &&
-        npm install --legacy-peer-deps &&
-        echo '🚀 Starting Angular...' &&
-        npx ng serve --host 0.0.0.0 --port 4200 --disable-host-check
-      "
+    command: sh -c "npm start -- --host 0.0.0.0 --port 4200"
 
   # ========================
-  # PLAYWRIGHT
+  # PLAYWRIGHT (TESTS)
   # ========================
   playwright:
     image: mcr.microsoft.com/playwright/python:v1.60.0-jammy
-    container_name: docker-playwright
+    container_name: playwright
     working_dir: /app
     volumes:
       - ../../..:/app
     depends_on:
-      - ui
       - api
+      - ui
     environment:
-      - PYTHONUNBUFFERED=1
+      - PYTHONUNBUFFERED=1    # ✅ désactive buffering Python
     command: >
       sh -c "
-        echo '⏳ Waiting for UI (HTTP)...' &&
+        echo '⏳ Waiting for UI...' &&
         until curl -s http://ui:4200 > /dev/null; do
-          sleep 3
+          sleep 2
         done &&
-        echo '✅ UI is reachable' &&
-        echo '⏳ Waiting Angular build...' &&
-        sleep 15 &&
-        echo '✅ Running tests' &&
+        echo '✅ UI is ready' &&
         pip install pytest playwright &&
         pytest -s tests
       "
 
+# ========================
+# VOLUME GLOBAL
+# ========================
 volumes:
   postgres_data:
