@@ -1,0 +1,314 @@
+// ============================================================
+// VISTA — Schéma de base de données
+// Version  : 2.0 — Séparation app / ai
+// Base     : PostgreSQL
+// Date     : 2026-06-26
+// ============================================================
+// Initialisation PostgreSQL :
+//   CREATE SCHEMA app;
+//   CREATE SCHEMA ai;
+//   CREATE EXTENSION IF NOT EXISTS "pgcrypto";
+// ============================================================
+
+
+// ============================================================
+// ENUMS
+// ============================================================
+
+Enum app.image_status {
+  pending  [note: 'Importée, aucune annotation sauvegardée']
+  draft    [note: 'Brouillons kanban en cours']
+  ready    [note: 'Annotations confirmées']
+}
+
+Enum app.annotation_severity {
+  Critique [note: 'tag-red']
+  Majeur   [note: 'tag-orange']
+  Mineur   [note: 'tag-cyan']
+}
+
+Enum app.geometry_type {
+  bbox     [note: 'Rectangle normalisé — nw>0, nh>0']
+  polygon  [note: 'Polygone fermé — min 3 points']
+  freehand [note: 'Tracé libre — min 2 points']
+}
+
+Enum ai.model_family {
+  yolov8
+  resnet
+  unet
+  cnn_custom
+  vit
+  autoencoder
+}
+
+Enum ai.model_task {
+  detection
+  classification
+  segmentation
+}
+
+Enum ai.model_status {
+  training
+  trained
+  deployed
+  archived
+}
+
+Enum ai.metric_type {
+  mAP
+  accuracy
+  IoU
+}
+
+Enum ai.optimizer_type {
+  AdamW
+  SGD
+  RMSprop
+}
+
+Enum ai.training_run_status {
+  pending
+  running
+  completed
+  failed
+}
+
+Enum ai.deployment_status {
+  active
+  stopped
+}
+
+Enum ai.target_format {
+  api_rest
+  tensorrt
+  onnx
+  tflite
+  docker
+}
+
+Enum ai.image_format_input {
+  json_base64
+  multipart
+}
+
+
+// ============================================================
+// SCHÉMA app — Données métier
+// ============================================================
+// Périmètre : tout ce que l'utilisateur humain crée ou consulte
+// directement via l'interface (images, annotations, référentiels).
+// Cycle de vie piloté par les annotateurs et les data managers.
+// ============================================================
+
+
+// ------------------------------------------------------------
+// app.defect_classes
+// Référentiel des types de défauts reconnus par la plateforme.
+// Données de seed issues du frontend (5 valeurs hardcodées).
+// ------------------------------------------------------------
+Table app.defect_classes {
+  id               serial       [pk]
+  label            varchar(100) [not null, unique,
+                                 note: 'Rayure profonde | Fissure (micro) | Décoloration / Tâche | Défaut d\'usinage (Bavure) | Pièce manquante']
+  slug             varchar(50)  [not null, unique,
+                                 note: 'Ex: rayure_profonde']
+  description      text
+}
+
+
+// ------------------------------------------------------------
+// app.datasets
+// Jeu de données labellisé = regroupement d'images annotées.
+// Point de jonction entre app et ai : produit dans app,
+// consommé par ai.training_runs et ai.ml_models.
+// ------------------------------------------------------------
+Table app.datasets {
+  id           uuid         [pk, default: `gen_random_uuid()`]
+  name         varchar(255) [not null, unique,
+                             note: 'Ex: Dataset_Carter_Moteur, Dataset_Pistons_X, Dataset_Soudures_Laser']
+  description  text
+  created_at   timestamptz  [not null, default: `now()`]
+  updated_at   timestamptz  [not null, default: `now()`]
+}
+
+
+// ------------------------------------------------------------
+// app.images
+// Image industrielle importée dans le module d'annotation.
+// Contient les métadonnées et la source (base64 phase 1,
+// storage_path phase 2).
+// ------------------------------------------------------------
+Table app.images {
+  id            uuid         [pk, default: `gen_random_uuid()`]
+  dataset_id    uuid         [ref: > app.datasets.id,
+                              note: 'Nullable — image peut exister hors dataset']
+  name          varchar(255) [not null,
+                              note: 'Nom de fichier — ex: carter_moteur_082.jpg']
+  storage_path  text         [not null, note: 'Chemin S3/MinIO/local']
+  format        varchar(10)  [not null, note: 'PNG, JPG']
+  image_hash    varchar(100) [not null, unique, note: 'SHA-256 du contenu fichier — empêche les doublons']
+  size_bytes    int
+  width         int          [not null]
+  height        int          [not null]
+  status        app.image_status [not null, default: 'pending']
+  created_at    timestamptz  [not null, default: `now()`]
+
+  indexes {
+    dataset_id [name: 'idx_app_images_dataset']
+    status     [name: 'idx_app_images_status']
+  }
+}
+
+
+// ------------------------------------------------------------
+// app.annotations
+// Annotation géométrique persistée sur une image.
+// Table centrale du module annotation — alimentée par
+// POST /api/images/save-annotations.
+// ------------------------------------------------------------
+Table app.annotations {
+  id               uuid         [pk, default: `gen_random_uuid()`]
+  image_id         uuid         [not null, ref: > app.images.id]
+  defect_class_id  int          [not null, ref: > app.defect_classes.id]
+  severity         app.annotation_severity [not null]
+  description      text
+  geometry_type    app.geometry_type [not null]
+  geometry_data    jsonb        [not null,
+                                 note: 'Format DTO API — bbox:{"type":"bbox","bbox":{nx,ny,nw,nh}} | polygon:{"type":"polygon","polygon":{points[],closed:true}} | freehand:{"type":"freehand","freehand":{points[],closed:false}}']
+  created_at       timestamptz  [not null, default: `now()`]
+  updated_at       timestamptz  [not null, default: `now()`]
+  createdBy        text
+  updatedBy        text
+  indexes {
+    image_id        [name: 'idx_app_annotations_image']
+    defect_class_id [name: 'idx_app_annotations_defect']
+    severity        [name: 'idx_app_annotations_severity']
+    geometry_type   [name: 'idx_app_annotations_geo_type']
+    (geometry_data) [type: gin, name: 'idx_app_annotations_geodata']
+  }
+
+  note: 'CHECK bbox: nw>0 nh>0 | CHECK polygon: array_length>=3 | CHECK freehand: array_length>=2 | scls CSS exclu (dérivé de severity)'
+}
+
+// ============================================================
+// SCHÉMA ai — Données ML / IA
+// ============================================================
+// Périmètre : tout ce qui est produit ou consommé par la
+// chaîne ML (modèles, entraînements, déploiements, inférences).
+// Cycle de vie piloté par les data scientists et MLOps.
+// Dépend de app.datasets — jamais l'inverse.
+// ============================================================
+
+
+// ------------------------------------------------------------
+// ai.ml_models
+// Modèle de vision entraîné. Porte les métriques, la famille
+// d'architecture, la tâche et le cycle de vie.
+// ------------------------------------------------------------
+Table ai.ml_models {
+  id                    uuid         [pk, default: `gen_random_uuid()`]
+  name                  varchar(255) [not null, unique,
+                                      note: 'Convention {Family}_{Task}_v{N} — ex: YOLOv8_Detect_v3']
+  family                ai.model_family [not null]
+  task_type             ai.model_task   [not null]
+  primary_metric_type   ai.metric_type
+  primary_metric_value  decimal(6,4) [note: 'Ex: 0.864 (mAP 86.4%)']
+  weights_path          text         [note: 'Chemin fichier .pt / .onnx / .engine']
+  status                ai.model_status [not null, default: 'trained']
+  created_at            timestamptz  [not null, default: `now()`]
+  trained_at            timestamptz
+
+  indexes {
+    status     [name: 'idx_ai_ml_models_status']
+  }
+}
+
+
+// ------------------------------------------------------------
+// ai.training_runs
+// Session d'entraînement d'un modèle. Porte les hyperparamètres
+// d'entrée (config_snapshot) et les métriques résultat
+// (best_val_metric, epochs_done, results_snapshot).
+// ------------------------------------------------------------
+Table ai.training_runs {
+  id                uuid         [pk, default: `gen_random_uuid()`]
+  model_id          uuid         [not null, unique, ref: - ai.ml_models.id]
+  dataset_id        uuid         [not null, ref: > app.datasets.id,
+                                  note: 'Cross-schema FK — dataset consommé par l\'entraînement']
+  status            ai.training_run_status [not null, default: 'pending']
+  // Paramètres d'entrée
+  config_snapshot   jsonb        [not null, default: '{}',
+                                  note: 'Snapshot JSON complet des paramètres au lancement (epochs, batch, lr, yolo_variant…)']
+  // Métriques résultat
+  epochs_done       int          [note: 'Nombre d\'epochs effectivement réalisées']
+  best_val_metric   decimal(6,4) [note: 'Meilleure métrique de validation — ex: mAP@50 = 0.824']
+  results_snapshot  jsonb        [note: 'Métriques complètes en sortie — ex: {box_loss, val_map50, val_map95, precision, recall}']
+  started_at        timestamptz
+  finished_at       timestamptz
+  created_at        timestamptz  [not null, default: `now()`]
+
+  indexes {
+    model_id   [name: 'idx_ai_training_model']
+    dataset_id [name: 'idx_ai_training_dataset']
+    status     [name: 'idx_ai_training_status']
+  }
+}
+
+
+// ------------------------------------------------------------
+// ai.deployments
+// Modèle mis en production sur une cible donnée.
+// Porte la configuration de déploiement : format, endpoint,
+// paramètres batch, Grad-CAM, auto-alignement.
+// ------------------------------------------------------------
+Table ai.deployments {
+  id                  uuid         [pk, default: `gen_random_uuid()`]
+  model_id            uuid         [not null, ref: > ai.ml_models.id]
+  name                varchar(255) [not null]
+  status              ai.deployment_status [not null, default: 'active']
+  target_format       ai.target_format [not null]
+  endpoint_url        text         [note: 'Ex: /api/vision/v1/detect']
+  image_format_input  ai.image_format_input
+  resolution_max      varchar(20)  [note: 'Ex: 640x640']
+  max_batch_size      int          [not null, default: 8]
+  include_gradcam     boolean      [not null, default: false]
+  auto_alignment      boolean      [not null, default: false]
+  deployed_at         timestamptz
+  created_at          timestamptz  [not null, default: `now()`]
+
+  indexes {
+    model_id [name: 'idx_ai_deployments_model']
+    status   [name: 'idx_ai_deployments_status']
+  }
+}
+
+
+// ------------------------------------------------------------
+// ai.evaluation_results
+// Évaluation batch d'un modèle sur un dataset complet.
+// Porte les métriques agrégées (mAP, précision, rappel…)
+// et les performances système (latence, mémoire).
+// ------------------------------------------------------------
+Table ai.evaluation_results {
+  id                   uuid         [pk, default: `gen_random_uuid()`]
+  model_id             uuid         [not null, ref: > ai.ml_models.id]
+  dataset_id           uuid         [not null, ref: > app.datasets.id]
+  // Métriques de qualité agrégées sur le dataset
+  total_images         int          [not null, note: 'Nombre d\'images évaluées']
+  total_defects_found  int          [not null, default: 0]
+  mean_ap_50           decimal(6,4) [note: 'mAP@50 moyen sur le dataset']
+  mean_precision       decimal(6,4)
+  mean_recall          decimal(6,4)
+  // Performances système
+  mean_latency_ms      int
+  mean_memory_usage_mb int
+  // Détail optionnel par classe
+  per_class_metrics    jsonb        [note: 'Ex: {"Bavure":{"ap":0.92,"precision":0.88},"Rayure":{"ap":0.81}}']
+  evaluated_at         timestamptz  [not null, default: `now()`]
+
+  indexes {
+    model_id     [name: 'idx_ai_evaluation_model']
+    evaluated_at [name: 'idx_ai_evaluation_at']
+  }
+}
