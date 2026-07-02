@@ -185,6 +185,17 @@ interface SaveToastState {
   message: string;
 }
 
+interface DeleteImageConfirmState {
+  visible: boolean;
+  imageId: string | null;
+  imageName: string;
+}
+
+interface VisualLimitDialogState {
+  visible: boolean;
+  message: string;
+}
+
 type PanelMode = 'idle' | 'create' | 'edit-base' | 'edit-draft';
 type BBoxEditHandle = 'move' | 'nw' | 'ne' | 'sw' | 'se';
 
@@ -283,6 +294,17 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
   saveToast = signal<SaveToastState>({
     visible: false,
     kind: 'success',
+    message: '',
+  });
+
+  deleteImageConfirm = signal<DeleteImageConfirmState>({
+    visible: false,
+    imageId: null,
+    imageName: '',
+  });
+
+  visualLimitDialog = signal<VisualLimitDialogState>({
+    visible: false,
     message: '',
   });
 
@@ -488,8 +510,6 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
     this.focusBaseAnnotation(id);
   }
 
-
-
   draftCount(): number {
     return this.localDraftWorkItemsCount();
   }
@@ -604,8 +624,6 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
 
     input.value = '';
   }
-
-
 
   allImages(): ImageModel[] {
     return this.imageList().slice(0, 2);
@@ -749,13 +767,48 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
 
   requestDeleteImage(imageId: string, event?: Event): void {
     event?.stopPropagation();
+
     const target = this.imageList().find((img) => img.id === imageId);
     if (!target) return;
 
-    const confirmed = window.confirm(`Supprimer définitivement l'image "${target.name}" et toutes ses annotations associées ?`);
-    if (!confirmed) return;
+    this.deleteImageConfirm.set({
+      visible: true,
+      imageId: target.id,
+      imageName: target.name,
+    });
+  }
 
+  cancelDeleteImage(): void {
+    this.deleteImageConfirm.set({
+      visible: false,
+      imageId: null,
+      imageName: '',
+    });
+  }
+
+  confirmDeleteImage(): void {
+    const imageId = this.deleteImageConfirm().imageId;
+    if (!imageId) {
+      this.cancelDeleteImage();
+      return;
+    }
+
+    this.cancelDeleteImage();
     this.deleteImage(imageId);
+  }
+
+  showVisualLimitDialog(): void {
+    this.visualLimitDialog.set({
+      visible: true,
+      message: 'Limite de 10 éléments atteinte dans le visuel. Supprimez un élément existant avant de dessiner une nouvelle annotation.',
+    });
+  }
+
+  closeVisualLimitDialog(): void {
+    this.visualLimitDialog.set({
+      visible: false,
+      message: '',
+    });
   }
 
   private deleteImage(imageId: string): void {
@@ -996,15 +1049,49 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
     return this.kanbanItems().find((item) => item.workId === id) ?? null;
   }
 
-  setCurrentWork(workId: string | null): void {
+  private toolForGeometry(geometry: Geometry): Tool {
+    if (geometry.type === 'bbox') return 'rect';
+    if (geometry.type === 'polygon') return 'polygon';
+    return 'freehand';
+  }
+
+  private toolForWorkItem(item: KanbanWorkItem): Tool {
+    if (item.meta.shape.includes('Lasso') || item.meta.shape.includes('Tracé libre')) {
+      return 'freehand';
+    }
+
+    return this.toolForGeometry(item.geometry);
+  }
+
+  private syncToolFromCurrentWork(): void {
+    const current = this.currentWorkItem();
+    if (!current) return;
+
+    const expectedTool = this.toolForWorkItem(current);
+
+    if (this.currentTool() !== expectedTool) {
+      this.currentTool.set(expectedTool);
+    }
+
+    this.bboxEditState = null;
+    this.polygonPreview = null;
+  }
+
+  setCurrentWork(workId: string | null, options: { syncTool?: boolean } = {}): void {
     const changed = this.currentWorkId() !== workId;
     if (changed) {
       this.clearUndoRedoHistory();
     }
 
     this.bboxEditState = null;
+    this.polygonPreview = null;
     this.currentWorkId.set(workId);
     this.syncEditorFromCurrentWork();
+
+    if (options.syncTool !== false) {
+      this.syncToolFromCurrentWork();
+    }
+
     this.persistWorkspaceState();
     this.drawAnnotationsOnly();
   }
@@ -1024,7 +1111,7 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
     }
 
     if (!this.canAddVisualItem()) {
-      this.showSaveToast('error', 'Limite de 10 éléments dans le visuel.');
+      this.showVisualLimitDialog();
       return null;
     }
 
@@ -1035,7 +1122,7 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
     };
 
     this.kanbanItems.update((items) => [...items, created].sort((a, b) => a.order - b.order));
-    this.setCurrentWork(created.workId);
+    this.setCurrentWork(created.workId, { syncTool: item.source !== 'draft' });
     this.persistWorkspaceState();
     return created;
   }
@@ -1189,12 +1276,8 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
   }
 
   deletePersistedAnnotation(id: number): void {
-    // confirmation before performing deletion
     const ann = this.imageAnnotations().find((item) => item.id === id);
     if (!ann) return;
-
-    const confirmed = window.confirm(`Supprimer définitivement l'annotation #${id} de l'image courante ?`);
-    if (!confirmed) return;
 
     this.clearRemoteFeedback();
     this.isSavingRemote.set(true);
@@ -1289,6 +1372,7 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
       this.currentWorkId.set(null);
     }
 
+    this.syncToolFromCurrentWork();
     this.bboxEditState = null;
     this.drawAnnotationsOnly();
   }
@@ -1848,6 +1932,7 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
     this.nextKanbanOrder = Math.max(state?.nextOrder ?? 1, maxOrder + 1, 1);
 
     this.syncEditorFromCurrentWork();
+    this.syncToolFromCurrentWork();
   }
 
   private readWorkspaceState(): PersistedAnnotationWorkspaceV3 | null {
@@ -2047,7 +2132,6 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
     return `${prefix}_${Date.now()}_${Math.random().toString(16).slice(2)}`;
   }
 
-
   private loadImageFromSrc(src: string, updateMeta: boolean): void {
     const imgEl = new Image();
     imgEl.src = src;
@@ -2192,7 +2276,7 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
 
       const visualClass: 'tag-red' | 'tag-orange' | 'tag-cyan' | 'draft' | 'base-neutral' =
         workItem
-          ? (workItem.dirty ? 'draft' : 'base-neutral')
+          ? (workItem.dirty ? workItem.meta.scls : 'base-neutral')
           : ann.scls;
 
       this.drawGeometry(
@@ -2226,9 +2310,13 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
     }
 
     if (this.draftFreehandCurrent.drawing && this.draftFreehandCurrent.points.length > 1) {
-      const geometry: Geometry = { type: 'freehand', data: { points: this.draftFreehandCurrent.points, closed: false } };
+      const geometry: Geometry = {
+        type: 'freehand',
+        data: { points: this.draftFreehandCurrent.points, closed: false },
+      };
       this.drawGeometry(ctx, geometry, -3, 'draft', 'Draft', true);
     }
+
     this.drawCurrentBBoxHandles(ctx);
   }
 
@@ -2428,6 +2516,17 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
       this.panStartOffset = { x: off.x, y: off.y };
       this.drawCanvas?.nativeElement.setPointerCapture?.(e.pointerId);
       this.drawBaseImage();
+      this.drawAnnotationsOnly();
+      return;
+    }
+
+    if (!this.canAddVisualItem()) {
+      this.clearRemoteFeedback();
+      this.draftRectCurrent = null;
+      this.draftPolygonCurrent = { points: [], closed: false };
+      this.polygonPreview = null;
+      this.draftFreehandCurrent = { points: [], drawing: false };
+      this.showVisualLimitDialog();
       this.drawAnnotationsOnly();
       return;
     }
@@ -2660,7 +2759,6 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
     return sev === 'Critique' ? 'tag-red' : sev === 'Majeur' ? 'tag-orange' : 'tag-cyan';
   }
 
-
   private currentBBoxWorkItem(): KanbanWorkItem | null {
     const current = this.currentWorkItem();
     if (!current || current.geometry.type !== 'bbox') return null;
@@ -2823,7 +2921,6 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
     ctx.restore();
   }
 
-
   private rectToBbox(start: NormPoint, end: NormPoint): BBox | null {
     const x1 = Math.min(start.nx, end.nx);
     const y1 = Math.min(start.ny, end.ny);
@@ -2914,7 +3011,7 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
     const den = (x1 - x2) * (y3 - y4) - (y1 - y2) * (x3 - x4);
     if (Math.abs(den) < 1e-10) return null;
 
-    const t = ((x1 - x3) * (y3 - y4) - (y1 - y3) * (x3 - x4)) / den;
+    const t = ((x1 - x3) * (y3 - y4) - (y1 - y3) * (x1 - x2)) / den;
     const u = ((x1 - x3) * (y1 - y2) - (y1 - y3) * (x1 - x2)) / den;
 
     const eps = 1e-6;
