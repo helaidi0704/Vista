@@ -1,0 +1,31 @@
+.PHONY: help run diagnose troubleshoot fix test
+
+FILE ?= docker.json
+
+help:
+    @echo ""
+    @echo "Vista-AIOps"
+    @echo ""
+    @echo "Commandes disponibles :"
+    @echo "  make run"
+    @echo "  make diag FILE=docker.json"
+    @echo "  make troubl FILE=docker.json"
+    @echo "  make fix FILE=docker.json"
+    @echo ""
+
+run:
+    uvicorn server:app --reload
+
+diag:
+    python cli.py diagnose $(FILE)
+
+troubl:
+    python cli.py troubleshoot $(FILE)
+
+fix:
+    python cli.py fix $(FILE)
+
+test:
+    curl -X POST http://localhost:8000/diagnose \
+    -H "Content-Type: application/json" \
+    -d @$(FILE)
