@@ -103,6 +103,28 @@ Enum ai.image_format_input {
 
 
 // ------------------------------------------------------------
+// app.users
+// Utilisateur de la plateforme (annotateur, data manager,
+// data scientist, admin). Référencé par createdBy/updatedBy
+// sur les tables des schémas app et ai.
+// ------------------------------------------------------------
+Table app.users {
+  id             uuid         [pk, default: `gen_random_uuid()`]
+  email          varchar(255) [not null, unique]
+  password_hash  varchar(255) [not null,
+                               note: 'Hash bcrypt/argon2 — auth locale en attendant SSO/Active Directory']
+  full_name      varchar(255) [not null]
+  role           varchar(50)  [not null, default: 'annotator',
+                               note: 'annotator | data_manager | data_scientist | admin']
+  is_active      boolean      [not null, default: true]
+  is_email_verified boolean   [not null, default: false,
+                               note: 'Passe à true après confirmation du compte suite au signup — false = première connexion pas encore confirmée']
+  created_at     timestamptz  [not null, default: `now()`]
+  updated_at     timestamptz  [not null, default: `now()`]
+}
+
+
+// ------------------------------------------------------------
 // app.defect_classes
 // Référentiel des types de défauts reconnus par la plateforme.
 // Données de seed issues du frontend (5 valeurs hardcodées).
@@ -111,8 +133,6 @@ Table app.defect_classes {
   id               serial       [pk]
   label            varchar(100) [not null, unique,
                                  note: 'Rayure profonde | Fissure (micro) | Décoloration / Tâche | Défaut d\'usinage (Bavure) | Pièce manquante']
-  slug             varchar(50)  [not null, unique,
-                                 note: 'Ex: rayure_profonde']
   description      text
 }
 
@@ -130,6 +150,8 @@ Table app.datasets {
   description  text
   created_at   timestamptz  [not null, default: `now()`]
   updated_at   timestamptz  [not null, default: `now()`]
+  createdBy    uuid         [ref: > app.users.id]
+  updatedBy    uuid         [ref: > app.users.id]
 }
 
 
@@ -153,6 +175,7 @@ Table app.images {
   height        int          [not null]
   status        app.image_status [not null, default: 'pending']
   created_at    timestamptz  [not null, default: `now()`]
+  createdBy     uuid         [ref: > app.users.id]
 
   indexes {
     dataset_id [name: 'idx_app_images_dataset']
@@ -178,8 +201,8 @@ Table app.annotations {
                                  note: 'Format DTO API — bbox:{"type":"bbox","bbox":{nx,ny,nw,nh}} | polygon:{"type":"polygon","polygon":{points[],closed:true}} | freehand:{"type":"freehand","freehand":{points[],closed:false}}']
   created_at       timestamptz  [not null, default: `now()`]
   updated_at       timestamptz  [not null, default: `now()`]
-  createdBy        text
-  updatedBy        text
+  createdBy        uuid         [ref: > app.users.id]
+  updatedBy        uuid         [ref: > app.users.id]
   indexes {
     image_id        [name: 'idx_app_annotations_image']
     defect_class_id [name: 'idx_app_annotations_defect']
@@ -218,6 +241,7 @@ Table ai.ml_models {
   status                ai.model_status [not null, default: 'trained']
   created_at            timestamptz  [not null, default: `now()`]
   trained_at            timestamptz
+  createdBy             uuid         [ref: > app.users.id, note: 'Cross-schema FK']
 
   indexes {
     status     [name: 'idx_ai_ml_models_status']
@@ -247,6 +271,7 @@ Table ai.training_runs {
   started_at        timestamptz
   finished_at       timestamptz
   created_at        timestamptz  [not null, default: `now()`]
+  createdBy         uuid         [ref: > app.users.id, note: 'Cross-schema FK']
 
   indexes {
     model_id   [name: 'idx_ai_training_model']
@@ -276,6 +301,7 @@ Table ai.deployments {
   auto_alignment      boolean      [not null, default: false]
   deployed_at         timestamptz
   created_at          timestamptz  [not null, default: `now()`]
+  createdBy           uuid         [ref: > app.users.id, note: 'Cross-schema FK']
 
   indexes {
     model_id [name: 'idx_ai_deployments_model']
@@ -306,6 +332,7 @@ Table ai.evaluation_results {
   // Détail optionnel par classe
   per_class_metrics    jsonb        [note: 'Ex: {"Bavure":{"ap":0.92,"precision":0.88},"Rayure":{"ap":0.81}}']
   evaluated_at         timestamptz  [not null, default: `now()`]
+  createdBy            uuid         [ref: > app.users.id, note: 'Cross-schema FK']
 
   indexes {
     model_id     [name: 'idx_ai_evaluation_model']

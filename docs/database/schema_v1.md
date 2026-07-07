@@ -26,6 +26,24 @@ schéma app  ──────▶  schéma ai
 
 ## Schéma `app` — Données métier
 
+### `app.users`
+
+Utilisateur de la plateforme (annotateur, data manager, data scientist, admin). Référencé par les colonnes `createdBy`/`updatedBy` des tables des schémas `app` et `ai`.
+
+| Colonne | Type | Rôle |
+|---------|------|------|
+| `id` | `uuid` PK | Identifiant unique généré automatiquement |
+| `email` | `varchar(255)` UNIQUE | Adresse email de connexion |
+| `password_hash` | `varchar(255)` | Hash du mot de passe (bcrypt/argon2) — authentification locale en attendant une connexion SSO/Active Directory |
+| `full_name` | `varchar(255)` | Nom complet affiché |
+| `role` | `varchar(50)` | Rôle applicatif : `annotator` / `data_manager` / `data_scientist` / `admin` |
+| `is_active` | `boolean` | Compte actif ou désactivé |
+| `is_email_verified` | `boolean` | `true` une fois le compte confirmé après le signup — `false` tant que la confirmation n'a pas eu lieu (première connexion) |
+| `created_at` | `timestamptz` | Date de création du compte |
+| `updated_at` | `timestamptz` | Date de dernière modification |
+
+---
+
 ### `app.defect_classes`
 
 Référentiel des types de défauts reconnus par la plateforme. Table de seed — les valeurs sont définies par l'équipe, pas par les utilisateurs.
@@ -34,7 +52,6 @@ Référentiel des types de défauts reconnus par la plateforme. Table de seed �
 |---------|------|------|
 | `id` | `serial` PK | Identifiant numérique auto-incrémenté |
 | `label` | `varchar(100)` UNIQUE | Libellé affiché — ex : `Rayure profonde`, `Fissure (micro)`, `Décoloration / Tâche`, `Défaut d'usinage (Bavure)`, `Pièce manquante` |
-| `slug` | `varchar(50)` UNIQUE | Identifiant machine lisible — ex : `rayure_profonde` |
 | `description` | `text` | Description métier optionnelle du défaut |
 
 ---
@@ -50,6 +67,8 @@ Regroupement logique d'images annotées constituant un jeu de données. Point de
 | `description` | `text` | Description libre du dataset |
 | `created_at` | `timestamptz` | Date de création |
 | `updated_at` | `timestamptz` | Date de dernière modification |
+| `createdBy` | `uuid` FK → `app.users` | Utilisateur ayant créé le dataset |
+| `updatedBy` | `uuid` FK → `app.users` | Utilisateur ayant fait la dernière modification |
 
 ---
 
@@ -70,6 +89,7 @@ Image industrielle importée dans le module d'annotation. Contient les métadonn
 | `height` | `int` | Hauteur en pixels |
 | `status` | `image_status` | État dans le workflow : `pending` / `draft` / `ready` |
 | `created_at` | `timestamptz` | Date d'import |
+| `createdBy` | `uuid` FK → `app.users` | Utilisateur ayant importé l'image |
 
 **Valeurs de `status` :**
 
@@ -96,8 +116,8 @@ Annotation géométrique persistée sur une image. Table centrale du module d'an
 | `geometry_data` | `jsonb` | Coordonnées normalisées (0–1) de la géométrie — voir format ci-dessous |
 | `created_at` | `timestamptz` | Date de création |
 | `updated_at` | `timestamptz` | Date de dernière modification |
-| `createdBy` | `text` | Identifiant ou nom de l'utilisateur créateur |
-| `updatedBy` | `text` | Identifiant ou nom du dernier modificateur |
+| `createdBy` | `uuid` FK → `app.users` | Utilisateur créateur de l'annotation |
+| `updatedBy` | `uuid` FK → `app.users` | Utilisateur ayant fait la dernière modification |
 
 **Format de `geometry_data` selon `geometry_type` :**
 
@@ -137,6 +157,7 @@ Modèle de vision entraîné et versionné. Porte les informations d'architectur
 | `status` | `model_status` | Cycle de vie : `training` / `trained` / `deployed` / `archived` |
 | `created_at` | `timestamptz` | Date de création |
 | `trained_at` | `timestamptz` | Date de fin d'entraînement |
+| `createdBy` | `uuid` FK → `app.users` | Utilisateur ayant créé le modèle — clé cross-schéma |
 
 ---
 
@@ -157,6 +178,7 @@ Session d'entraînement qui produit exactement un modèle. Relation 1:1 avec `ai
 | `started_at` | `timestamptz` | Horodatage de démarrage |
 | `finished_at` | `timestamptz` | Horodatage de fin |
 | `created_at` | `timestamptz` | Horodatage de création du run |
+| `createdBy` | `uuid` FK → `app.users` | Utilisateur ayant lancé le run — clé cross-schéma |
 
 ---
 
@@ -179,6 +201,7 @@ Instance de déploiement d'un modèle vers une cible de production. Porte toute 
 | `auto_alignment` | `boolean` | Activer l'auto-alignement GPU avant inférence |
 | `deployed_at` | `timestamptz` | Date de mise en production |
 | `created_at` | `timestamptz` | Date de création |
+| `createdBy` | `uuid` FK → `app.users` | Utilisateur ayant réalisé le déploiement — clé cross-schéma |
 
 ---
 
@@ -200,6 +223,7 @@ Résultat d'une évaluation batch d'un modèle sur un dataset complet. Agrège l
 | `mean_memory_usage_mb` | `int` | Consommation mémoire moyenne en Mo |
 | `per_class_metrics` | `jsonb` | Métriques détaillées par classe de défaut — ex : `{"Bavure": {"ap": 0.92, "precision": 0.88}, "Rayure": {"ap": 0.81}}` |
 | `evaluated_at` | `timestamptz` | Date de l'évaluation |
+| `createdBy` | `uuid` FK → `app.users` | Utilisateur ayant déclenché l'évaluation — clé cross-schéma |
 
 ---
 
@@ -209,9 +233,11 @@ Résultat d'une évaluation batch d'un modèle sur un dataset complet. Agrège l
 app.defect_classes ◀──── app.annotations
 app.datasets       ◀──── app.images
 app.images         ◀──── app.annotations
+app.users          ◀──── app.datasets, app.images, app.annotations (createdBy/updatedBy)
 
 app.datasets  ◀──── ai.training_runs   (cross-schéma)
 app.datasets  ◀──── ai.evaluation_results (cross-schéma)
+app.users     ◀──── ai.ml_models, ai.training_runs, ai.deployments, ai.evaluation_results (createdBy, cross-schéma)
 
 ai.ml_models  ──── ai.training_runs    (1:1 — un run produit un modèle)
 ai.ml_models  ◀──── ai.deployments
