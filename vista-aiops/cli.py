@@ -2,9 +2,7 @@ import json
 import sys
 from pathlib import Path
 
-import requests
-
-API_URL = "http://localhost:8000"
+from google import genai
 
 
 def load_json_log(json_file):
@@ -21,7 +19,7 @@ def load_text_log(log_file):
         return f.read()
 
 
-def save_report(diagnostic):
+def save_report(cause: str, correction: str):
 
     Path("reports").mkdir(exist_ok=True)
 
@@ -29,13 +27,13 @@ def save_report(diagnostic):
 CAUSE
 =====
 
-{diagnostic.get("cause", "")}
+{cause}
 
 
 CORRECTION
 ==========
 
-{diagnostic.get("correction", "")}
+{correction}
 """
 
     Path("reports/diagnostic.txt").write_text(
@@ -55,31 +53,56 @@ def print_banner(title):
 
 def diagnose(log):
 
-    response = requests.post(
-        f"{API_URL}/diagnose",
-        json={"log": log},
-        timeout=120
+    client = genai.Client()
+
+    prompt = f"""
+Tu es un expert DevOps, CI/CD, Docker, FastAPI, Angular et Playwright.
+
+Analyse le log suivant.
+
+Retourne uniquement un JSON au format :
+
+{{
+  "cause": "...",
+  "correction": "..."
+}}
+
+LOG :
+
+{log}
+"""
+
+    response = client.models.generate_content(
+        model="gemini-2.5-flash",
+        contents=prompt
     )
 
-    response.raise_for_status()
+    text = response.text.strip()
 
-    data = response.json()
+    if text.startswith("```json"):
+        text = text.replace("```json", "", 1)
 
-    diagnostic = data["diagnostic"]
+    if text.endswith("```"):
+        text = text[:-3]
 
-    save_report(diagnostic)
+    data = json.loads(text.strip())
+
+    cause = data.get("cause", "N/A")
+    correction = data.get("correction", "N/A")
+
+    save_report(cause, correction)
 
     print_banner("DIAGNOSTIC")
 
     print("CAUSE")
     print("-" * 20)
-    print(diagnostic.get("cause", "N/A"))
+    print(cause)
 
     print()
 
     print("CORRECTION")
     print("-" * 20)
-    print(diagnostic.get("correction", "N/A"))
+    print(correction)
 
     print()
     print("Rapport sauvegardé : reports/diagnostic.txt")
@@ -93,7 +116,7 @@ def main():
         print(
             "\nUsage :\n"
             "  python cli.py diagnose docker.json\n"
-            "  python cli.py diagnose-log logs/pytest.log\n"
+            "  python cli.py diagnose-log logs/docker.log\n"
         )
 
         sys.exit(1)
