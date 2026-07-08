@@ -13,7 +13,9 @@ import {
 import { CommonModule, isPlatformBrowser } from '@angular/common';
 import { HttpClient } from '@angular/common/http';
 import { FormsModule } from '@angular/forms';
-import { delay, firstValueFrom, Observable, of } from 'rxjs';
+import { catchError, firstValueFrom, map, Observable, throwError, timeout } from 'rxjs';
+
+import { API_BASE_URL } from '../../core/api-config';
 
 type Tool = 'pan' | 'rect' | 'polygon' | 'freehand';
 type SeverityUi = 'Critique' | 'Majeur' | 'Mineur';
@@ -55,7 +57,7 @@ interface AnnotationMeta {
 }
 
 interface AnnotationItem extends AnnotationMeta {
-  id: number;
+  id: string;
   imageId: string;
   geometry: Geometry;
 }
@@ -68,7 +70,7 @@ interface KanbanWorkItem {
   source: WorkItemSource;
   dirty: boolean;
   imageId: string;
-  baseAnnotationId?: number;
+  baseAnnotationId?: string;
   draftId?: string;
   geometry: Geometry;
   meta: AnnotationMeta;
@@ -98,7 +100,7 @@ interface ImageModel {
 }
 
 interface PersistedAnnotationWorkspaceV3 {
-  version: 3;
+  version: 4;
   currentImageId: string | null;
   imageOrderIds: string[];
   images: Record<string, ImageModel>;
@@ -142,7 +144,7 @@ interface SaveCreateAnnotationDto {
 }
 
 interface SaveUpdateAnnotationDto extends SaveCreateAnnotationDto {
-  id: number;
+  id: string;
 }
 
 interface SaveImageDto {
@@ -161,6 +163,11 @@ type SaveGeometryDto =
   | { type: 'polygon'; polygon: { points: NormPoint[]; closed: true } }
   | { type: 'freehand'; freehand: { points: NormPoint[]; closed: false } };
 
+interface CreatedAnnotationRefDto {
+  workId: string;
+  id: string;
+}
+
 interface SaveAnnotationsResponseDto {
   success: boolean;
   requestId: string;
@@ -169,6 +176,7 @@ interface SaveAnnotationsResponseDto {
   failedWorkIds: string[];
   backendMessage: string;
   receivedAt: string;
+  created: CreatedAnnotationRefDto[];
 }
 
 interface SaveAnnotationsErrorDto {
@@ -201,7 +209,7 @@ type BBoxEditHandle = 'move' | 'nw' | 'ne' | 'sw' | 'se';
 
 interface DeletePersistedAnnotationResponseDto {
   success: boolean;
-  id: number;
+  id: string;
   receivedAt: string;
 }
 
@@ -241,6 +249,26 @@ interface UndoState {
   backgroundKanbanItems: KanbanWorkItem[];
 }
 
+/* Backend list response DTOs — match GET /api/images and GET /api/images/{id}/annotations */
+interface ListImagesResponseDto {
+  success: boolean;
+  images: {
+    id: string; name: string; format: string;
+    size: number | null; width: number; height: number;
+    status: string; createdAt: string; src: string;
+  }[];
+}
+
+interface ListAnnotationsResponseDto {
+  success: boolean;
+  annotations: {
+    id: string; imageId: string; defectLabel: string;
+    severity: SeverityUi; description: string;
+    geometryType: string; geometry: SaveGeometryDto;
+    createdAt: string; updatedAt: string;
+  }[];
+}
+
 @Component({
   selector: 'app-annotation',
   standalone: true,
@@ -256,15 +284,11 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
 
   private readonly platformId = inject(PLATFORM_ID);
   private readonly http = inject(HttpClient);
+  private readonly apiBaseUrl = inject(API_BASE_URL);
   private readonly isBrowser = isPlatformBrowser(this.platformId);
 
-  private readonly STORAGE_KEY = 'vista.viewer.annotation.workspace.v3';
-  private readonly SAVE_ENDPOINT = '/api/images/save-annotations';
+  private readonly STORAGE_KEY = 'vista.viewer.annotation.workspace.v4';
   private readonly MAX_VISUAL_ITEMS = 10;
-
-  private readonly DEFAULT_IMAGE_ID = 'asset_carter_moteur';
-  private readonly DEFAULT_IMAGE_SRC = '/assets/carter_moteur.png';
-  private readonly DEFAULT_IMAGE_NAME = 'carter_moteur_082.jpg';
 
   readonly defectOptions = [
     'Rayure profonde',
@@ -281,8 +305,8 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
   annotationType = signal('Rayure profonde');
   annotationDesc = signal("Rayure profonde orientée à 45° sur la zone d'épaulement droite.");
 
-  imageFileName = signal(this.DEFAULT_IMAGE_NAME);
-  imageFileMeta = signal('RGB · 1920x1080 · 2.4 MB');
+  imageFileName = signal('');
+  imageFileMeta = signal('');
 
   currentImage = signal<ImageModel | null>(null);
   imageList = signal<ImageModel[]>([]);
@@ -312,7 +336,7 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
   currentWorkId = signal<string | null>(null);
 
   imageAnnotations = signal<AnnotationItem[]>([]);
-  hoveredAnnotId = signal<number | null>(null);
+  hoveredAnnotId = signal<string | null>(null);
 
   private draftShapes: DraftShape[] = [];
   private draftRectCurrent: { start: NormPoint; end: NormPoint; dragging: boolean } | null = null;
@@ -329,7 +353,6 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
   private imageRenderRect = { x: 0, y: 0, w: 0, h: 0 };
 
   private readonly CLOSE_TOL_PX = 14;
-  private nextAnnotationId = 1;
   private nextDraftId = 1;
   private readonly BBOX_HANDLE_HIT_RADIUS_PX = 10;
   private readonly BBOX_MIN_SIZE = 0.003;
@@ -405,10 +428,7 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
           this.drawAnnotationsOnly();
         }
       } else {
-        this.setDefaultImageAndSeed();
-        this.persistWorkspaceState();
-        const img = this.currentImage();
-        if (img) this.loadImageFromSrc(img.src, true);
+        this.loadImagesFromBackend();
       }
 
       this.drawBaseImage();
@@ -500,12 +520,12 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
     this.persistWorkspaceState();
   }
 
-  hoverAnnotation(id: number, isEnter: boolean): void {
+  hoverAnnotation(id: string, isEnter: boolean): void {
     this.hoveredAnnotId.set(isEnter ? id : null);
     this.drawAnnotationsOnly();
   }
 
-  editAnnotation(id: number): void {
+  editAnnotation(id: string): void {
     this.clearRemoteFeedback();
     this.focusBaseAnnotation(id);
   }
@@ -752,7 +772,6 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
     this.applyDraftState(state.draftsByImageId?.[img.id]);
     this.applyEditorState(state.editorByImageId?.[img.id]);
     this.applyKanbanState(state.kanbanByImageId?.[img.id]);
-    this.syncNextAnnotationId();
     this.syncNextDraftId();
     this.imageFileName.set(img.name);
     this.imageFileMeta.set(`${img.format} · ${img.width}x${img.height}${img.size != null ? ` · ${this.formatBytes(img.size)}` : ''}`);
@@ -761,7 +780,15 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
   }
 
   private appendImageAndSelect(image: ImageModel): void {
-    this.imageList.update((list) => [...list, image]);
+    this.imageList.update((list) => {
+      const idx = list.findIndex((img) => img.id === image.id);
+      if (idx >= 0) {
+        const updated = [...list];
+        updated[idx] = image;
+        return updated;
+      }
+      return [...list, image];
+    });
     this.selectImageById(image.id);
   }
 
@@ -815,7 +842,7 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
     this.clearRemoteFeedback();
     this.isSavingRemote.set(true);
 
-    this.deleteImageRequest$(imageId).subscribe({
+    this.deleteImageHttp$(imageId).subscribe({
       next: (response) => {
         if (!response.success) {
           this.handleSaveFailure("La suppression de l'image ne s'est pas faite.");
@@ -830,7 +857,7 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
         const remainingIds = new Set(this.imageList().map((img) => img.id));
 
         const nextState: PersistedAnnotationWorkspaceV3 = {
-          version: 3,
+          version: 4,
           currentImageId: deletingCurrent ? null : (prev?.currentImageId ?? this.currentImage()?.id ?? null),
           imageOrderIds: this.imageList().map((img) => img.id),
           images: {},
@@ -895,7 +922,7 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
     this.isSavingRemote.set(true);
     this.clearRemoteFeedback();
 
-    this.registerImageRequest$(candidate).subscribe({
+    this.registerImageHttp$(candidate).subscribe({
       next: (response) => {
         if (!response.success) {
           this.handleSaveFailure("L'ajout de l'image ne s'est pas fait.");
@@ -904,6 +931,8 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
 
         this.appendImageAndSelect(response.savedImage);
         this.showSaveToast('success', 'Image ajoutée.');
+        const imgId = response.savedImage.id;
+        if (imgId) this.refreshAnnotationsForImage(imgId);
       },
       error: () => {
         this.handleSaveFailure("L'ajout de l'image ne s'est pas fait.");
@@ -915,81 +944,11 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
     });
   }
 
-  private registerImageDryRun$(image: ImageModel): Observable<RegisterImageResponseDto> {
-    void this.http;
 
-    const requestId = this.createRequestId();
-    const receivedAt = new Date().toISOString();
 
-    console.groupCollapsed('[VISTA][DRY-RUN API] POST /api/images');
-    console.log('method:', 'POST');
-    console.log('requestId:', requestId);
-    console.log('imageId:', image.id);
-    console.log('payload:', image);
-    console.groupEnd();
-
-    return of({
-      success: true,
-      requestId,
-      savedImage: image,
-      backendMessage: 'Dry-run image registration only.',
-      receivedAt,
-    }).pipe(delay(250));
-  }
-
-  private saveAnnotationsRequest$(dto: SaveAnnotationsRequestDto): Observable<SaveAnnotationsResponseDto> {
-    return this.saveToBackendDryRun$(dto);
-    /*
-    return this.saveToBackendHttp$(dto);
-    */
-  }
-
-  private registerImageRequest$(image: ImageModel): Observable<RegisterImageResponseDto> {
-    return this.registerImageDryRun$(image);
-    /*
-    return this.registerImageHttp$(image);
-    */
-  }
-
-  private deleteImageRequest$(imageId: string): Observable<DeleteImageResponseDto> {
-    return this.deleteImageDryRun$(imageId);
-    /*
-    return this.deleteImageHttp$(imageId);
-    */
-  }
-
-  private deletePersistedAnnotationRequest$(id: number): Observable<DeletePersistedAnnotationResponseDto> {
-    return this.deletePersistedAnnotationDryRun$(id);
-    /*
-    return this.deletePersistedAnnotationHttp$(id);
-    */
-  }
-
-  private deleteImageDryRun$(imageId: string): Observable<DeleteImageResponseDto> {
-    void this.http;
-
-    const requestId = this.createRequestId();
-    const receivedAt = new Date().toISOString();
-
-    console.groupCollapsed('[VISTA][DRY-RUN API] DELETE /api/images/' + imageId);
-    console.log('method:', 'DELETE');
-    console.log('requestId:', requestId);
-    console.log('imageId:', imageId);
-    console.groupEnd();
-
-    return of({
-      success: true,
-      requestId,
-      deletedImageId: imageId,
-      backendMessage: 'Dry-run image deletion only.',
-      receivedAt,
-    }).pipe(delay(250));
-  }
-
-  /*
   private registerImageHttp$(image: ImageModel): Observable<RegisterImageResponseDto> {
     return this.http.post<RegisterImageResponseDto>(
-      '/api/images',
+      `${this.apiBaseUrl}/api/images`,
       image,
       {
         observe: 'response',
@@ -1015,7 +974,7 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
 
   private deleteImageHttp$(imageId: string): Observable<DeleteImageResponseDto> {
     return this.http.delete<DeleteImageResponseDto>(
-      `/api/images/${imageId}`,
+      `${this.apiBaseUrl}/api/images/${imageId}`,
       {
         observe: 'response',
         headers: {
@@ -1037,11 +996,7 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
       }),
     );
   }
-  */
 
-  private createWorkId(prefix: string): string {
-    return `${prefix}_${Date.now()}_${Math.random().toString(16).slice(2)}`;
-  }
 
   private currentWorkItem(): KanbanWorkItem | null {
     const id = this.currentWorkId();
@@ -1171,7 +1126,7 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
     this.drawAnnotationsOnly();
   }
 
-  private logFocusBaseAnnotation(annotationId: number): void {
+  private logFocusBaseAnnotation(annotationId: string): void {
     console.log('[VISTA][VISUEL][FOCUS_BASE]', {
       annotationId,
       alreadyInVisual: this.kanbanItems().some((item) => item.source === 'base' && item.baseAnnotationId === annotationId),
@@ -1179,7 +1134,7 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
     });
   }
 
-  private focusBaseAnnotation(annotationId: number): void {
+  private focusBaseAnnotation(annotationId: string): void {
     this.logFocusBaseAnnotation(annotationId);
 
     const ann = this.imageAnnotations().find((a) => a.id === annotationId);
@@ -1207,7 +1162,7 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
     });
   }
 
-  isBaseRowCurrent(annotationId: number): boolean {
+  isBaseRowCurrent(annotationId: string): boolean {
     const current = this.currentWorkItem();
     return !!current && current.source === 'base' && current.baseAnnotationId === annotationId;
   }
@@ -1260,7 +1215,7 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
       : 'visual-item visual-item-base-neutral';
   }
 
-  private currentHighlightMatchesGeometry(geometry: Geometry, fallbackAnnotationId?: number): boolean {
+  private currentHighlightMatchesGeometry(geometry: Geometry, fallbackAnnotationId?: string): boolean {
     const current = this.currentWorkItem();
     if (!current) return false;
 
@@ -1275,14 +1230,14 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
     return JSON.stringify(a) === JSON.stringify(b);
   }
 
-  deletePersistedAnnotation(id: number): void {
+  deletePersistedAnnotation(id: string): void {
     const ann = this.imageAnnotations().find((item) => item.id === id);
     if (!ann) return;
 
     this.clearRemoteFeedback();
     this.isSavingRemote.set(true);
 
-    this.deletePersistedAnnotationRequest$(id).subscribe({
+    this.deletePersistedAnnotationHttp$(id).subscribe({
       next: (response) => {
         if (!response.success) {
           this.handleSaveFailure('La suppression ne s’est pas faite.');
@@ -1300,6 +1255,8 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
         this.showSaveToast('success', 'Annotation supprimée.');
         this.persistWorkspaceState();
         this.drawAnnotationsOnly();
+        const ci = this.currentImage();
+        if (ci) this.refreshAnnotationsForImage(ci.id);
       },
       error: () => {
         this.handleSaveFailure('La suppression ne s’est pas faite.');
@@ -1507,7 +1464,7 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
     this.isSavingRemote.set(true);
 
     try {
-      const response = await firstValueFrom(this.saveAnnotationsRequest$(dto));
+      const response = await firstValueFrom(this.saveToBackendHttp$(dto));
 
       if (!response.success) {
         this.handleSaveFailure("L'enregistrement ne s'est pas fait.");
@@ -1518,6 +1475,8 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
       const remaining = this.kanbanItems().length;
       this.remoteSaveSuccess.set(remaining === 0 ? 'Enregistrement préparé.' : 'Enregistrement partiel préparé.');
       this.showSaveToast(remaining === 0 ? 'success' : 'error', remaining === 0 ? 'Enregistrement réussi.' : 'Enregistrement partiel : certains éléments restent dans le kanban.');
+      const currentId = this.currentImage()?.id;
+      if (currentId) this.refreshAnnotationsForImage(currentId);
 
       this.currentWorkId.set(null);
       this.persistWorkspaceState();
@@ -1556,10 +1515,6 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
         .filter((item) => item.source === 'base' && item.dirty)
         .map((item) => this.toSaveUpdateAnnotationDto(item)),
     };
-  }
-
-  private createRequestId(): string {
-    return `req_${Date.now()}_${Math.random().toString(16).slice(2)}`;
   }
 
   private toSaveCreateAnnotationDto(item: KanbanWorkItem): SaveCreateAnnotationDto {
@@ -1650,43 +1605,6 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
     return new Set(points.map((p) => `${p.nx.toFixed(6)}:${p.ny.toFixed(6)}`)).size;
   }
 
-  private saveToBackendDryRun$(dto: SaveAnnotationsRequestDto): Observable<SaveAnnotationsResponseDto> {
-    void this.http;
-
-    const receivedAt = new Date().toISOString();
-    const simulatedHeaders = {
-      'Content-Type': 'application/json',
-      'X-Vista-Dry-Run': 'true',
-      'X-Request-Id': dto.requestId,
-    };
-
-    console.groupCollapsed('[VISTA][DRY-RUN API] POST ' + this.SAVE_ENDPOINT);
-    console.log('endpoint:', this.SAVE_ENDPOINT);
-    console.log('method:', 'POST');
-    console.log('headers:', simulatedHeaders);
-    console.log('requestId:', dto.requestId);
-    console.log('sentAt:', dto.sentAt);
-    console.log('timestamp:', receivedAt);
-    console.log('imageId:', dto.image.id);
-    console.log('createsCount:', dto.creates.length);
-    console.log('updatesCount:', dto.updates.length);
-    console.log('payload:', dto);
-    console.groupEnd();
-
-    const createdWorkIds = dto.creates.map((item) => item.workId);
-    const updatedWorkIds = dto.updates.map((item) => item.workId);
-
-    return of({
-      success: true,
-      requestId: dto.requestId,
-      createdWorkIds,
-      updatedWorkIds,
-      failedWorkIds: [],
-      backendMessage: 'Dry-run only: no external call has been made.',
-      receivedAt,
-    }).pipe(delay(300));
-  }
-
   private applySaveResponse(response: SaveAnnotationsResponseDto): void {
     const items = this.kanbanItems();
     const failed = new Set(response.failedWorkIds);
@@ -1695,14 +1613,17 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
       .map((item) => item.workId);
     const succeeded = new Set([...response.createdWorkIds, ...response.updatedWorkIds, ...cleanBaseWorkIds]);
     const successfulItems = items.filter((item) => succeeded.has(item.workId) && !failed.has(item.workId));
+    const createdIdByWorkId = new Map(response.created.map((ref) => [ref.workId, ref.id]));
 
     const createdAnnotations: AnnotationItem[] = [];
-    const updatedById = new Map<number, KanbanWorkItem>();
+    const updatedById = new Map<string, KanbanWorkItem>();
 
     for (const item of successfulItems) {
       if (item.source === 'draft') {
+        const backendId = createdIdByWorkId.get(item.workId);
+        if (!backendId) continue;
         createdAnnotations.push({
-          id: this.nextAnnotationId++,
+          id: backendId,
           imageId: item.imageId,
           ...item.meta,
           geometry: JSON.parse(JSON.stringify(item.geometry)) as Geometry,
@@ -1737,28 +1658,14 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
     );
 
     this.draftShapes = this.draftShapes.filter((draft) => remainingDraftIds.has(draft.id));
-    this.syncNextAnnotationId();
     this.currentWorkId.set(null);
     this.bboxEditState = null;
     this.clearUndoRedoHistory();
   }
 
-  private deletePersistedAnnotationDryRun$(id: number): Observable<DeletePersistedAnnotationResponseDto> {
-    void this.http;
-    const receivedAt = new Date().toISOString();
-    console.groupCollapsed('[VISTA][DRY-RUN API] DELETE /api/annotations/' + id);
-    console.log('method:', 'DELETE');
-    console.log('id:', id);
-    console.log('timestamp:', receivedAt);
-    console.groupEnd();
-
-    return of({ success: true, id, receivedAt }).pipe(delay(220));
-  }
-
-  /*
-  private deletePersistedAnnotationHttp$(id: number): Observable<DeletePersistedAnnotationResponseDto> {
+  private deletePersistedAnnotationHttp$(id: string): Observable<DeletePersistedAnnotationResponseDto> {
     return this.http.delete<DeletePersistedAnnotationResponseDto>(
-      `/api/annotations/${id}`,
+      `${this.apiBaseUrl}/api/annotations/${id}`,
       {
         observe: 'response',
         headers: {
@@ -1767,25 +1674,23 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
       },
     ).pipe(
       timeout(10000),
-        map((response) => {
-          const body = response.body;
-          if (!body || body.success !== true || body.id !== id) {
-            throw new Error('Invalid delete response');
-          }
-          return body;
-        }),
+      map((response) => {
+        const body = response.body;
+        if (!body || body.success !== true || body.id !== id) {
+          throw new Error('Invalid delete response');
+        }
+        return body;
+      }),
       catchError((error: unknown) => {
         console.error('[VISTA][API] deletePersistedAnnotation failed', error);
         return throwError(() => new Error('DELETE_BACKEND_FAILED'));
       }),
     );
   }
-  */
 
-  /*
   private saveToBackendHttp$(dto: SaveAnnotationsRequestDto): Observable<SaveAnnotationsResponseDto> {
     return this.http.post<SaveAnnotationsResponseDto>(
-      this.SAVE_ENDPOINT,
+      `${this.apiBaseUrl}/api/images/save-annotations`,
       dto,
       {
         observe: 'response',
@@ -1809,7 +1714,6 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
       }),
     );
   }
-  */
 
   private handleSaveFailure(message: string): void {
     const errorDto: SaveAnnotationsErrorDto = {
@@ -1941,7 +1845,7 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
       const raw = localStorage.getItem(this.STORAGE_KEY);
       if (!raw) return null;
       const parsed = JSON.parse(raw) as Partial<PersistedAnnotationWorkspaceV3>;
-      if (parsed.version !== 3) return null;
+      if (parsed.version !== 4) return null;
       if (!Array.isArray(parsed.imageOrderIds)) return null;
       if (!parsed.images || !parsed.annotationsByImageId || !parsed.viewByImageId || !parsed.draftsByImageId || !parsed.editorByImageId || !parsed.kanbanByImageId) {
         return null;
@@ -1989,7 +1893,7 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
     }
 
     const state: PersistedAnnotationWorkspaceV3 = {
-      version: 3,
+      version: 4,
       currentImageId: current?.id ?? null,
       imageOrderIds: list.map((img) => img.id),
       images,
@@ -2045,77 +1949,12 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
     this.applyEditorState(state.editorByImageId?.[img.id]);
     this.applyKanbanState(state.kanbanByImageId?.[img.id]);
 
-    this.syncNextAnnotationId();
     this.syncNextDraftId();
 
     this.imageFileName.set(img.name);
     this.imageFileMeta.set(`${img.format} · ${img.width}x${img.height}${img.size != null ? ` · ${this.formatBytes(img.size)}` : ''}`);
 
     return true;
-  }
-
-  private setDefaultImageAndSeed(): void {
-    this.resetTransientAnnotationState();
-    this.clearRemoteFeedback();
-
-    const img: ImageModel = {
-      id: this.DEFAULT_IMAGE_ID,
-      name: this.DEFAULT_IMAGE_NAME,
-      src: this.DEFAULT_IMAGE_SRC,
-      format: 'PNG',
-      size: undefined,
-      width: 0,
-      height: 0,
-      createdAt: new Date().toISOString(),
-    };
-
-    this.imageList.set([img]);
-    this.currentImage.set(img);
-    this.imageFileName.set(img.name);
-    this.imageFileMeta.set('PNG · —');
-
-    this.imageAnnotations.set([
-      {
-        id: 1,
-        imageId: img.id,
-        shape: '🟥 BBox',
-        def: 'Rayure profonde',
-        sev: 'Critique',
-        scls: 'tag-red',
-        desc: 'Rayure importante sur la surface principale.',
-        geometry: { type: 'bbox', data: { nx: 0.45, ny: 0.35, nw: 0.15, nh: 0.3 } },
-      },
-      {
-        id: 2,
-        imageId: img.id,
-        shape: '🔷 Polygon',
-        def: 'Fissure',
-        sev: 'Majeur',
-        scls: 'tag-orange',
-        desc: 'Micro-fissure en périphérie (zone B).',
-        geometry: {
-          type: 'polygon',
-          data: {
-            points: [
-              { nx: 0.38, ny: 0.35 },
-              { nx: 0.42, ny: 0.45 },
-              { nx: 0.4, ny: 0.55 },
-            ],
-            closed: true,
-          },
-        },
-      },
-    ]);
-
-    this.zoom.set(100);
-    this.panOffset.set({ x: 0, y: 0 });
-    this.syncNextAnnotationId();
-    this.persistWorkspaceState();
-  }
-
-  private syncNextAnnotationId(): void {
-    const maxId = this.imageAnnotations().reduce((max, a) => Math.max(max, a.id), 0);
-    this.nextAnnotationId = Math.max(1, maxId + 1);
   }
 
   private syncNextDraftId(): void {
@@ -2129,7 +1968,75 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
   }
 
   private newImageId(prefix: string): string {
-    return `${prefix}_${Date.now()}_${Math.random().toString(16).slice(2)}`;
+    return `${prefix}_${Date.now()}_${crypto.randomUUID().slice(0, 8)}`;
+  }
+
+  private createRequestId(): string {
+    return `req_${Date.now()}_${crypto.randomUUID().slice(0, 12)}`;
+  }
+
+  private createWorkId(prefix: string): string {
+    return `${prefix}_${crypto.randomUUID().slice(0, 12)}`;
+  }
+
+  private loadImagesFromBackend(): void {
+    if (!this.isBrowser) return;
+    this.http.get<ListImagesResponseDto>(`${this.apiBaseUrl}/api/images`)
+      .pipe(timeout(10000))
+      .subscribe({
+        next: (response) => {
+          if (!response.success || !response.images) return;
+          const images: ImageModel[] = response.images.map((item) => ({
+            id: item.id, name: item.name, src: item.src,
+            format: item.format, size: item.size ?? undefined,
+            width: item.width, height: item.height,
+            createdAt: item.createdAt,
+          }));
+          this.imageList.set(images);
+          if (images.length > 0) {
+            this.selectImageById(images[0].id);
+          }
+        },
+        error: (err: unknown) => console.error('[VISTA] Failed to load images from backend', err),
+      });
+  }
+
+  private refreshAnnotationsForImage(imageId: string): void {
+    this.http.get<ListAnnotationsResponseDto>(`${this.apiBaseUrl}/api/images/${imageId}/annotations`)
+      .pipe(timeout(10000))
+      .subscribe({
+        next: (response) => {
+          if (!response.success) return;
+          const annotations: AnnotationItem[] = response.annotations.map((ann) => ({
+            id: ann.id, imageId: ann.imageId,
+            shape: this.geometryShapeLabel(ann.geometryType),
+            def: ann.defectLabel, sev: ann.severity,
+            scls: this.severityToClass(ann.severity),
+            desc: ann.description,
+            geometry: this.backendGeometryToLocal(ann.geometry),
+          }));
+          this.imageAnnotations.set(annotations);
+          this.persistWorkspaceState();
+          this.drawAnnotationsOnly();
+        },
+        error: (err: unknown) => console.error('[VISTA] Failed to refresh annotations', err),
+      });
+  }
+
+  private geometryShapeLabel(geometryType: string): string {
+    if (geometryType === 'bbox') return '🟥 BBox';
+    if (geometryType === 'polygon') return '🔷 Polygon';
+    return '〰️ Tracé libre';
+  }
+
+  private backendGeometryToLocal(dto: SaveGeometryDto): Geometry {
+    if (dto.type === 'bbox' && 'bbox' in dto) {
+      return { type: 'bbox', data: dto.bbox };
+    }
+    if (dto.type === 'polygon' && 'polygon' in dto) {
+      return { type: 'polygon', data: dto.polygon as PolygonData };
+    }
+    return { type: 'freehand', data: (dto as { freehand: FreehandData }).freehand };
   }
 
   private loadImageFromSrc(src: string, updateMeta: boolean): void {
@@ -2293,7 +2200,7 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
       this.drawGeometry(
         ctx,
         item.geometry,
-        -1,
+        null,
         item.meta.scls,
         item.meta.def,
         true,
@@ -2302,7 +2209,7 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
 
     if (this.draftRectCurrent?.dragging) {
       const bbox = this.rectToBbox(this.draftRectCurrent.start, this.draftRectCurrent.end);
-      if (bbox) this.drawGeometry(ctx, { type: 'bbox', data: bbox }, -2, 'draft', 'Draft', true);
+      if (bbox) this.drawGeometry(ctx, { type: 'bbox', data: bbox }, null, 'draft', 'Draft', true);
     }
 
     if (this.draftPolygonCurrent.points.length > 0) {
@@ -2314,7 +2221,7 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
         type: 'freehand',
         data: { points: this.draftFreehandCurrent.points, closed: false },
       };
-      this.drawGeometry(ctx, geometry, -3, 'draft', 'Draft', true);
+      this.drawGeometry(ctx, geometry, null, 'draft', 'Draft', true);
     }
 
     this.drawCurrentBBoxHandles(ctx);
@@ -2323,14 +2230,14 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
   private drawGeometry(
     ctx: CanvasRenderingContext2D,
     geometry: Geometry,
-    annId: number,
+    annId: string | null,
     sevClass: 'tag-red' | 'tag-orange' | 'tag-cyan' | 'draft' | 'base-neutral',
     label: string,
     isDraft: boolean,
   ): void {
     const highlighted =
       (!isDraft && this.hoveredAnnotId() === annId) ||
-      this.currentHighlightMatchesGeometry(geometry, !isDraft && annId > 0 ? annId : undefined);
+      this.currentHighlightMatchesGeometry(geometry, !isDraft && annId != null ? annId : undefined);
 
     const colors = this.getColors(sevClass);
 

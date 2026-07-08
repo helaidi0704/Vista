@@ -1,0 +1,4 @@
+# Locally-stored uploaded image files (written by the annotation module's
+# image registration endpoint). Keep the folder tracked via data/.gitkeep,
+# but never commit actual uploaded content.
+data/images/

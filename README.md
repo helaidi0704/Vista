@@ -67,14 +67,15 @@ vista/
 
 | Path | Role | Status |
 |---|---|---|
-| `apps/api` | FastAPI backend | Scaffolding only — folders exist, no Python source yet |
-| `frontend` | Angular frontend | Implemented — Angular 21 app with SSR and page scaffolds |
+| `backend` | FastAPI backend (annotation module) | Implemented — health check + the 4 annotation endpoints (`/api/images`, `/api/images/{id}`, `/api/images/save-annotations`, `/api/annotations/{id}`), backed by PostgreSQL via SQLAlchemy/Alembic. See [backend/README.md](backend/README.md). |
+| `apps/api` | FastAPI backend (documented target layout) | Scaffolding only — folders exist, no Python source yet. `backend/` is the active implementation for now; consolidating the two is a TODO. |
+| `frontend` | Angular frontend | Implemented — Angular 21 app with SSR, page scaffolds, and a working Annotation module calling the real backend over HTTP |
 | `libs/dataset-utils`, `libs/image-utils`, `libs/ml-utils` | Shared Python libraries | Scaffolding only |
 | `services/image-processing` | Image processing service | Scaffolding only |
 | `services/ml-core` | ML core / training pipeline | Scaffolding only (see [services/ml-core/README.md](services/ml-core/README.md)) |
-| `infra/infra/docker`, `infra/infra/ci` | Infra documentation | Documentation only — no `docker-compose.yml` or extra CI config checked in yet |
+| `infra/infra/docker`, `infra/infra/ci` | Infra documentation | `infra/infra/docker/docker-compose.yml` provides a local PostgreSQL `db` service; `api`/`ui`/`redis` containers are still TODO |
 | `docs/database` | Database schema documentation | Implemented — see [docs/database/schema_v1.md](docs/database/schema_v1.md) |
-| `tests` | Test suite | Placeholder — no tests written yet |
+| `tests` | Test suite | Placeholder — no tests written yet (backend tests live under [backend/tests](backend/tests) instead) |
 
 ---
 
@@ -98,7 +99,7 @@ vista/
 | [uv](https://github.com/astral-sh/uv) | latest | Python dependency/environment manager used across the repo |
 | Node.js | 18+ | Required for the Angular frontend (see [frontend/package.json](frontend/package.json)) |
 | npm | 10.x | `frontend/package.json` pins `packageManager: npm@10.8.2` |
-| Docker | latest | TODO — no `docker-compose.yml` is committed yet; see [infra/infra/docker/README.md](infra/infra/docker/README.md) |
+| Docker | latest | Used to run a local PostgreSQL instance; see [infra/infra/docker/README.md](infra/infra/docker/README.md) |
 
 ### 1. Install dependencies
 
@@ -118,19 +119,30 @@ FastAPI, SQLAlchemy, Celery, and the image-processing/ML stack, plus the `dev` e
 uv sync --extra dev
 ```
 
-### 2. Backend (`apps/api`)
+### 2. Backend (`backend/`)
 
-The FastAPI application entrypoint is not implemented yet — `apps/api/app/*` only
-contains the intended folder structure (`api`, `core`, `repositories`, `schemas`,
-`services`, `workers`). Once an app entrypoint exists, it can be run with:
+The FastAPI application lives in `backend/` (see [backend/README.md](backend/README.md) for
+full details). It has its own `pyproject.toml`/virtual environment, separate from the root
+workspace. Start a local PostgreSQL instance, apply migrations, then run the API:
+
+```bash
+docker compose -f infra/infra/docker/docker-compose.yml up -d
+cd backend
+uv sync
+uv run alembic upgrade head
+```
 
 ```bash
 make dev-api
 ```
 
-> **TODO**: `make dev-api` currently runs `cd apps/api && uv run uvicorn main:app --reload --port 8000`,
-> but no `main.py`/FastAPI app is committed yet, so this command will fail until the
-> backend is implemented.
+`make dev-api` runs `cd backend && uv run uvicorn app.main:app --reload --port 8000`. The API
+is then available at `http://localhost:8000` (docs at `/docs`), matching the contract in
+[docs/VISTA_Contrat_Interface_Annotation_V02.md](docs/VISTA_Contrat_Interface_Annotation_V02.md).
+
+> **Note**: `apps/api/app/*` still only contains the intended folder structure (`api`, `core`,
+> `repositories`, `schemas`, `services`, `workers`) documented as the long-term target layout;
+> `backend/` is the actively developed implementation for now.
 
 ### 3. Frontend (`frontend`)
 
@@ -170,17 +182,20 @@ Commands below come from [Makefile](Makefile), [pyproject.toml](pyproject.toml),
 
 | Command | Description |
 |---|---|
-| `uv sync` | Install/refresh Python dependencies |
+| `uv sync` | Install/refresh root Python dependencies |
 | `make setup` | `uv sync` + `npm install` (TODO: still references the old `apps/annotation-ui` path, not `frontend`) |
-| `make dev-api` | Run the FastAPI backend (TODO: no app entrypoint committed yet) |
+| `make dev-api` | Run the FastAPI backend (`cd backend && uv run uvicorn app.main:app --reload --port 8000`) |
+| `cd backend && uv run alembic upgrade head` | Apply database migrations (requires the `db` container from `make docker-up`) |
+| `cd backend && uv run pytest` | Run backend tests (16 tests covering health + the 4 annotation endpoints) |
 | `cd frontend && npm start` | Run the Angular frontend dev server |
-| `make test` | Run `test-unit` and `test-integration` via `uv run pytest` |
+| `make test` | Run `test-unit` and `test-integration` via `uv run pytest` (root-level `tests/`, unrelated to `backend/tests`) |
 | `uv run pytest tests/unit` | Run Python unit tests (TODO: `tests/unit` has no tests yet) |
 | `uv run pytest tests/integration` | Run Python integration tests (TODO: `tests/integration` has no tests yet) |
 | `cd frontend && npm test` | Run Angular unit tests (Vitest) |
 | `uv run black .` | Format Python code ([tool.black] configured in `pyproject.toml`, line length 88) |
 | `uv run ruff check .` | Lint Python code ([tool.ruff] configured in `pyproject.toml`, line length 88) |
-| `make docker-up` / `make docker-down` | Start/stop the Docker Compose stack (TODO: `infra/infra/docker` currently only has a README, no `docker-compose.yml`) |
+| `cd backend && uv run ruff check .` | Lint the `backend/` package (its own `pyproject.toml`, line length 100) |
+| `make docker-up` / `make docker-down` | Start/stop the local PostgreSQL container (`infra/infra/docker/docker-compose.yml`) |
 
 ---
 

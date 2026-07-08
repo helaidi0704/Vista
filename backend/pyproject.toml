@@ -6,6 +6,9 @@ readme = "README.md"
 requires-python = ">=3.12.9,<3.14"
 dependencies = [
     "fastapi[standard]>=0.115.0",
+    "sqlalchemy>=2.0.23",
+    "psycopg2-binary>=2.9.9",
+    "alembic>=1.13.0",
 ]
 [dependency-groups]
 dev = [
@@ -16,6 +19,7 @@ dev = [
 [tool.ruff]
 line-length = 100
 target-version = "py312"
+extend-exclude = ["alembic/versions"]
 [tool.ruff.lint]
 select = [
     "E",
@@ -25,7 +29,11 @@ select = [
     "UP",
     "SIM",
 ]
-ignore = []
+ignore = [
+    "B008",  # FastAPI's `Depends(...)`/`Header(...)` in argument defaults is the standard idiom
+]
+[tool.ruff.lint.per-file-ignores]
+"alembic/env.py" = ["E402", "I001"]
 [tool.ruff.format]
 quote-style = "double"
 indent-style = "space"
