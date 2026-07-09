@@ -1,0 +1,139 @@
+name: CI/CD VISTA (DEV IBRAHIM)
+
+on:
+  push:
+    branches:
+      - dev-ibrahim
+      - develop
+  workflow_dispatch:
+
+env:
+  DOCKER_COMPOSE_FILE: ./infra/infra/docker/docker-compose.yml
+  ENV_FILE: ./infra/.env
+
+jobs:
+
+  ci:
+    runs-on: ubuntu-latest
+
+    steps:
+
+      # ----------------------
+      # CHECKOUT
+      # ----------------------
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # ----------------------
+      # NODE (FIX WARNING ✅)
+      # ----------------------
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'   # ✅ plus de warning Node 20
+
+      # ----------------------
+      # FRONTEND INSTALL
+      # ----------------------
+      - name: Install frontend
+        run: |
+          cd frontend
+          npm install --legacy-peer-deps
+
+      # ----------------------
+      # FRONTEND BUILD
+      # ----------------------
+      - name: Build frontend
+        run: |
+          cd frontend
+          npm run build --if-present
+
+      # ----------------------
+      # ENV CONFIG
+      # ----------------------
+      - name: Create env file
+        run: |
+          mkdir -p infra
+          echo "DB_NAME=postgres" > $ENV_FILE
+          echo "DB_USER=postgres" >> $ENV_FILE
+          echo "DB_PASSWORD=postgres" >> $ENV_FILE
+          echo "DB_PORT=5432" >> $ENV_FILE
+
+      # ----------------------
+      # DOCKER BUILD
+      # ----------------------
+      - name: Docker build
+        run: |
+          docker compose \
+            --env-file $ENV_FILE \
+            -f $DOCKER_COMPOSE_FILE \
+            build
+
+      # ----------------------
+      # DOCKER UP
+      # ----------------------
+      - name: Docker up
+        run: |
+          docker compose \
+            --env-file $ENV_FILE \
+            -f $DOCKER_COMPOSE_FILE \
+            up -d
+
+      # ----------------------
+      # WAIT SERVICES
+      # ----------------------
+      - name: Wait for services
+        run: |
+          echo "⏳ Waiting for services..."
+          sleep 30
+
+      # ----------------------
+      # DEBUG CONTAINERS
+      # ----------------------
+      - name: Check containers
+        run: docker ps
+
+      # ----------------------
+      # LOGS DEBUG
+      # ----------------------
+      - name: Show logs
+        run: |
+          docker compose \
+            --env-file $ENV_FILE \
+            -f $DOCKER_COMPOSE_FILE \
+            logs
+
+      # ----------------------
+      # TEST API
+      # ----------------------
+      - name: Test API
+        run: |
+          curl -f http://localhost:8000
+
+      # ----------------------
+      # TEST FRONTEND
+      # ----------------------
+      - name: Test Frontend
+        run: |
+          curl -f http://localhost:4200
+
+      # ----------------------
+      # 🔥 PLAYWRIGHT TESTS
+      # ----------------------
+      - name: Run Playwright tests
+        run: |
+          docker compose \
+            --env-file $ENV_FILE \
+            -f $DOCKER_COMPOSE_FILE \
+            run playwright
+
+      # ----------------------
+      # CLEANUP
+      # ----------------------
+      - name: Docker down
+        if: always()
+        run: |
+          docker compose \
+            --env-file $ENV_FILE \
+            -f $DOCKER_COMPOSE_FILE \
+            down -v
