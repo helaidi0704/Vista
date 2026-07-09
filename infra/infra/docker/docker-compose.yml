@@ -75,17 +75,20 @@ services:
   # PLAYWRIGHT
   # ========================
   playwright:
-    image: mcr.microsoft.com/playwright/python:v1.60.0-jammy
+    image: mcr.microsoft.com/playwright/python:v1.61.0-jammy
     container_name: docker-playwright
     working_dir: /app
     volumes:
       - ../../..:/app
+
     depends_on:
       - ui
       - api
+
     environment:
       - PYTHONUNBUFFERED=1
-      - BASE_URL=http://ui:4200   # ✅ CORRECTION CRITIQUE
+      - BASE_URL=http://ui:4200
+
     command: >
       sh -c "
         echo '⏳ Waiting for UI (HTTP)...' &&
@@ -96,7 +99,7 @@ services:
         echo '⏳ Waiting Angular build...' &&
         sleep 15 &&
         echo '✅ Running tests' &&
-        pip install pytest playwright &&
+        pip install pytest playwright==1.61.0 &&
         pytest -s tests
       "
 
