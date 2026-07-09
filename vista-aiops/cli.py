@@ -1,4 +1,5 @@
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -53,14 +54,21 @@ def print_banner(title):
 
 def diagnose(log):
 
-    client = genai.Client()
+    api_key = os.getenv("GEMINI_API_KEY")
+
+    if not api_key:
+        raise RuntimeError(
+            "GEMINI_API_KEY non défini dans les variables d'environnement"
+        )
+
+    client = genai.Client(api_key=api_key)
 
     prompt = f"""
 Tu es un expert DevOps, CI/CD, Docker, FastAPI, Angular et Playwright.
 
 Analyse le log suivant.
 
-Retourne uniquement un JSON au format :
+Retourne uniquement un JSON valide au format :
 
 {{
   "cause": "...",
