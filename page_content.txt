@@ -1,0 +1,11 @@
+Blocked request. This host ("ui") is not allowed.
+
+To allow this host, add it to allowedHosts under the serve target in angular.json.
+
+{
+  "serve": {
+    "options": {
+      "allowedHosts": ["ui"]
+    }
+  }
+}

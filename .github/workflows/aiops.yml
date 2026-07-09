@@ -1,0 +1,166 @@
+name: CI/CD VISTA (DEV IBRAHIM)
+
+on:
+  push:
+    branches:
+      - dev-ibrahim
+      - develop
+
+  workflow_dispatch:
+
+env:
+  DOCKER_COMPOSE_FILE: ./infra/infra/docker/docker-compose.yml
+  ENV_FILE: ./infra/.env
+
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install frontend
+        run: |
+          cd frontend
+          npm install --legacy-peer-deps
+
+      - name: Build frontend
+        run: |
+          cd frontend
+          npm run build --if-present
+
+      - name: Create env file
+        run: |
+          mkdir -p infra
+
+          cat > $ENV_FILE <<EOF
+          DB_NAME=postgres
+          DB_USER=postgres
+          DB_PASSWORD=postgres
+          DB_PORT=5432
+          EOF
+
+      - name: Docker build
+        run: |
+          docker compose \
+            --env-file $ENV_FILE \
+            -f $DOCKER_COMPOSE_FILE \
+            build
+
+      - name: Docker up
+        run: |
+          docker compose \
+            --env-file $ENV_FILE \
+            -f $DOCKER_COMPOSE_FILE \
+            up -d
+
+      - name: Wait services
+        run: |
+          sleep 60
+
+      - name: Docker ps
+        run: |
+          docker ps -a
+
+      - name: Show API logs
+        run: |
+          docker logs docker-api-1 || true
+
+      - name: Show UI logs
+        run: |
+          docker logs docker-ui-1 || true
+
+      - name: Show docker compose logs
+        run: |
+          docker compose \
+            --env-file $ENV_FILE \
+            -f $DOCKER_COMPOSE_FILE \
+            logs || true
+
+      - name: Test API
+        continue-on-error: true
+        run: |
+          echo "===== ROOT ====="
+          curl -v http://localhost:8000 || true
+
+          echo "===== DOCS ====="
+          curl -v http://localhost:8000/docs || true
+
+          echo "===== OPENAPI ====="
+          curl -v http://localhost:8000/openapi.json || true
+
+      - name: Test Frontend
+        continue-on-error: true
+        run: |
+          curl -v http://localhost:4200 || true
+
+      - name: Run Playwright tests
+        continue-on-error: true
+        run: |
+          docker compose \
+            --env-file $ENV_FILE \
+            -f $DOCKER_COMPOSE_FILE \
+            run playwright \
+            > playwright.log 2>&1 || true
+
+          echo "================ PLAYWRIGHT LOG ================"
+          cat playwright.log || true
+
+      - name: Collect logs
+        if: always()
+        run: |
+          mkdir -p logs
+          mkdir -p vista-aiops/reports
+
+          docker compose \
+            --env-file $ENV_FILE \
+            -f $DOCKER_COMPOSE_FILE \
+            logs > logs/docker.log 2>&1 || true
+
+          cp playwright.log logs/playwright.log || true
+
+      - name: Install AIOps dependencies
+        if: always()
+        run: |
+          pip install -r vista-aiops/requirements.txt
+
+      - name: Vista-AIOps Analysis
+        if: always()
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        run: |
+          cd vista-aiops
+          python cli.py diagnose-log ../logs/docker.log || true
+
+      - name: Upload logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: vista-logs
+          path: logs/
+
+      - name: Upload diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: aiops-report
+          path: vista-aiops/reports/
+
+      - name: Docker down
+        if: always()
+        run: |
+          docker compose \
+            --env-file $ENV_FILE \
+            -f $DOCKER_COMPOSE_FILE \
+            down -v
