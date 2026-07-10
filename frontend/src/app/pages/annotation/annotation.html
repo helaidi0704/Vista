@@ -309,9 +309,37 @@
         </svg>
         Liste des objets annotés sur cette image
       </span>
-      <span style="font-size:12px;color:var(--text-muted);">
-        {{ imageAnnotations().length }} annotation(s) trouvée(s)
-      </span>
+      <div class="annotation-table-header-actions">
+        <span style="font-size:12px;color:var(--text-muted);">
+          {{ imageAnnotations().length }} annotation(s) trouvée(s)
+        </span>
+        <div class="annotation-export-actions">
+          <button
+            class="btn btn-sm btn-secondary annotation-export-button"
+            type="button"
+            (click)="downloadAnnotationsJson()"
+            [disabled]="!currentImage() || imageAnnotations().length === 0">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+              <path d="M12 3v12"></path>
+              <path d="M7 10l5 5 5-5"></path>
+              <path d="M5 21h14"></path>
+            </svg>
+            Télécharger JSON
+          </button>
+          <button
+            class="btn btn-sm btn-secondary annotation-export-button"
+            type="button"
+            (click)="downloadAnnotationsCsv()"
+            [disabled]="!currentImage() || imageAnnotations().length === 0">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+              <path d="M12 3v12"></path>
+              <path d="M7 10l5 5 5-5"></path>
+              <path d="M5 21h14"></path>
+            </svg>
+            Télécharger CSV
+          </button>
+        </div>
+      </div>
     </div>
 
     @if (currentImage()) {

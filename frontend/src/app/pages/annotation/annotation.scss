@@ -11,6 +11,13 @@
 .annotation-count-tags{margin-bottom:12px}
 .annotation-table-scroll{width:100%;overflow-x:auto;overflow-y:hidden;scrollbar-width:thin}
 .annotation-table{width:100%;min-width:760px;border-collapse:collapse;font-size:12px}
+.annotation-table-header-actions{display:flex;align-items:center;justify-content:flex-end;gap:10px;margin-left:auto;flex-wrap:wrap;min-width:0}
+.annotation-export-actions{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+.annotation-export-button{display:inline-flex;align-items:center;justify-content:center;gap:6px;border-color:rgba(0,199,190,.36)!important;background:rgba(0,199,190,.08)!important;color:var(--text-primary)!important;box-shadow:inset 0 1px 0 rgba(255,255,255,.04);transition:border-color .16s ease,background .16s ease,box-shadow .16s ease,transform .16s ease,color .16s ease}
+.annotation-export-button svg{width:14px;height:14px;flex:0 0 auto;color:var(--cyan)}
+.annotation-export-button:hover:not(:disabled){border-color:rgba(0,199,190,.9)!important;background:rgba(0,199,190,.16)!important;box-shadow:0 0 0 3px rgba(0,199,190,.14),0 0 18px rgba(0,199,190,.16);transform:translateY(-1px)}
+.annotation-export-button:active:not(:disabled){transform:translateY(0)}
+.annotation-export-button:disabled{opacity:.48;cursor:not-allowed;box-shadow:none;filter:grayscale(.12)}
 
 .btn-orange{background:rgba(255,214,10,.15);color:var(--orange);border:1px solid rgba(255,214,10,.3)}
 .btn-orange:hover:not(:disabled){color:var(--text-primary);border-color:var(--orange)}
@@ -126,6 +133,7 @@
   .annotation-topbar{align-items:stretch}
   .annotation-current-image-card{flex:1 1 100%}
   .top-add-image-button,.annotation-topbar>.btn{flex:1 1 180px;justify-content:center}
+  .annotation-table-header-actions{justify-content:flex-start;margin-left:0;flex:1 1 100%}
   .annotation-editor-toolbar{gap:6px}
   .annotation-editor-toolbar .btn{min-height:34px}
   .visual-board{padding:8px}
@@ -138,6 +146,9 @@
   .annotation-editor-toolbar{width:100%}
   .annotation-zoom-range{flex:1 1 140px;width:auto}
   .annotation-severity-actions .btn{flex:1 1 100%}
+  .annotation-table-header-actions{align-items:flex-start;gap:8px}
+  .annotation-export-actions{width:100%}
+  .annotation-export-button{flex:1 1 132px}
   .visual-grid{grid-template-columns:repeat(2,minmax(0,1fr))}
   .visual-item-top{grid-template-columns:minmax(0,1fr) 22px}
   .visual-item-icons{display:none}

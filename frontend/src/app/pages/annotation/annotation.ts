@@ -13,7 +13,7 @@ import {
 import { CommonModule, isPlatformBrowser } from '@angular/common';
 import { HttpClient } from '@angular/common/http';
 import { FormsModule } from '@angular/forms';
-import { catchError, firstValueFrom, map, Observable, throwError, timeout } from 'rxjs';
+import { catchError, delay, firstValueFrom, map, Observable, of, throwError, timeout } from 'rxjs';
 
 import { API_BASE_URL } from '../../core/api-config';
 
@@ -289,6 +289,12 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
 
   private readonly STORAGE_KEY = 'vista.viewer.annotation.workspace.v4';
   private readonly MAX_VISUAL_ITEMS = 10;
+
+  private readonly USE_MOCK_API = false;
+
+  private readonly DEFAULT_IMAGE_ID = 'asset_carter_moteur';
+  private readonly DEFAULT_IMAGE_SRC = '/assets/carter_moteur.png';
+  private readonly DEFAULT_IMAGE_NAME = 'carter_moteur_082.jpg';
 
   readonly defectOptions = [
     'Rayure profonde',
@@ -779,6 +785,37 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
     this.loadImageFromSrc(img.src, true);
   }
 
+  private selectLoadedImage(image: ImageModel): void {
+    this.currentImage.set(image);
+
+    const state = this.readWorkspaceState();
+
+    this.imageAnnotations.set(
+      (state?.annotationsByImageId?.[image.id] ?? []).map((annotation) => ({
+        ...annotation,
+        imageId: annotation.imageId ?? image.id,
+      })),
+    );
+
+    this.zoom.set(state?.viewByImageId?.[image.id]?.zoom ?? 100);
+    this.panOffset.set(state?.viewByImageId?.[image.id]?.panOffset ?? { x: 0, y: 0 });
+
+    this.applyDraftState(state?.draftsByImageId?.[image.id]);
+    this.applyEditorState(state?.editorByImageId?.[image.id]);
+    this.applyKanbanState(state?.kanbanByImageId?.[image.id]);
+
+    this.syncNextDraftId();
+
+    this.imageFileName.set(image.name);
+    this.imageFileMeta.set(
+      `${image.format} · ${image.width}x${image.height}${image.size != null ? ` · ${this.formatBytes(image.size)}` : ''}`,
+    );
+
+    this.persistWorkspaceState();
+    this.loadImageFromSrc(image.src, true);
+    this.refreshAnnotationsForImage(image.id);
+  }
+
   private appendImageAndSelect(image: ImageModel): void {
     this.imageList.update((list) => {
       const idx = list.findIndex((img) => img.id === image.id);
@@ -789,7 +826,8 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
       }
       return [...list, image];
     });
-    this.selectImageById(image.id);
+
+    this.selectLoadedImage(image);
   }
 
   requestDeleteImage(imageId: string, event?: Event): void {
@@ -842,7 +880,7 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
     this.clearRemoteFeedback();
     this.isSavingRemote.set(true);
 
-    this.deleteImageHttp$(imageId).subscribe({
+    this.deleteImageRequest$(imageId).subscribe({
       next: (response) => {
         if (!response.success) {
           this.handleSaveFailure("La suppression de l'image ne s'est pas faite.");
@@ -922,7 +960,7 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
     this.isSavingRemote.set(true);
     this.clearRemoteFeedback();
 
-    this.registerImageHttp$(candidate).subscribe({
+    this.registerImageRequest$(candidate).subscribe({
       next: (response) => {
         if (!response.success) {
           this.handleSaveFailure("L'ajout de l'image ne s'est pas fait.");
@@ -931,8 +969,6 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
 
         this.appendImageAndSelect(response.savedImage);
         this.showSaveToast('success', 'Image ajoutée.');
-        const imgId = response.savedImage.id;
-        if (imgId) this.refreshAnnotationsForImage(imgId);
       },
       error: () => {
         this.handleSaveFailure("L'ajout de l'image ne s'est pas fait.");
@@ -945,6 +981,150 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
   }
 
 
+
+  private saveAnnotationsRequest$(dto: SaveAnnotationsRequestDto): Observable<SaveAnnotationsResponseDto> {
+    return this.USE_MOCK_API ? this.saveToBackendDryRun$(dto) : this.saveToBackendHttp$(dto);
+  }
+
+  private registerImageRequest$(image: ImageModel): Observable<RegisterImageResponseDto> {
+    return this.USE_MOCK_API ? this.registerImageDryRun$(image) : this.registerImageHttp$(image);
+  }
+
+  private deleteImageRequest$(imageId: string): Observable<DeleteImageResponseDto> {
+    return this.USE_MOCK_API ? this.deleteImageDryRun$(imageId) : this.deleteImageHttp$(imageId);
+  }
+
+  private deletePersistedAnnotationRequest$(id: string): Observable<DeletePersistedAnnotationResponseDto> {
+    return this.USE_MOCK_API
+      ? this.deletePersistedAnnotationDryRun$(id)
+      : this.deletePersistedAnnotationHttp$(id);
+  }
+
+  private listImagesRequest$(): Observable<ListImagesResponseDto> {
+    return this.USE_MOCK_API
+      ? this.listImagesDryRun$()
+      : this.http.get<ListImagesResponseDto>(`${this.apiBaseUrl}/api/images`).pipe(timeout(10000));
+  }
+
+  private listAnnotationsRequest$(imageId: string): Observable<ListAnnotationsResponseDto> {
+    return this.USE_MOCK_API
+      ? this.listAnnotationsDryRun$(imageId)
+      : this.http
+          .get<ListAnnotationsResponseDto>(`${this.apiBaseUrl}/api/images/${imageId}/annotations`)
+          .pipe(timeout(10000));
+  }
+
+  private registerImageDryRun$(image: ImageModel): Observable<RegisterImageResponseDto> {
+    return of({
+      success: true,
+      requestId: this.createRequestId(),
+      savedImage: image,
+      backendMessage: 'Mock: image enregistrée (dry-run).',
+      receivedAt: new Date().toISOString(),
+    } satisfies RegisterImageResponseDto).pipe(delay(150));
+  }
+
+  private deleteImageDryRun$(imageId: string): Observable<DeleteImageResponseDto> {
+    return of({
+      success: true,
+      requestId: this.createRequestId(),
+      deletedImageId: imageId,
+      backendMessage: 'Mock: image supprimée (dry-run).',
+      receivedAt: new Date().toISOString(),
+    } satisfies DeleteImageResponseDto).pipe(delay(150));
+  }
+
+  private deletePersistedAnnotationDryRun$(id: string): Observable<DeletePersistedAnnotationResponseDto> {
+    return of({
+      success: true,
+      id,
+      receivedAt: new Date().toISOString(),
+    } satisfies DeletePersistedAnnotationResponseDto).pipe(delay(150));
+  }
+
+  private saveToBackendDryRun$(dto: SaveAnnotationsRequestDto): Observable<SaveAnnotationsResponseDto> {
+    const created: CreatedAnnotationRefDto[] = dto.creates.map((create) => ({
+      workId: create.workId,
+      id: this.newImageId('mock_ann'),
+    }));
+
+    return of({
+      success: true,
+      requestId: dto.requestId,
+      createdWorkIds: dto.creates.map((create) => create.workId),
+      updatedWorkIds: dto.updates.map((update) => update.workId),
+      failedWorkIds: [],
+      backendMessage: 'Mock: enregistrement effectué (dry-run).',
+      receivedAt: new Date().toISOString(),
+      created,
+    } satisfies SaveAnnotationsResponseDto).pipe(delay(200));
+  }
+
+  private listImagesDryRun$(): Observable<ListImagesResponseDto> {
+    return of({
+      success: true,
+      images: [
+        {
+          id: this.DEFAULT_IMAGE_ID,
+          name: this.DEFAULT_IMAGE_NAME,
+          format: 'PNG',
+          size: null,
+          width: 0,
+          height: 0,
+          status: 'ready',
+          createdAt: new Date().toISOString(),
+          src: this.DEFAULT_IMAGE_SRC,
+        },
+      ],
+    } satisfies ListImagesResponseDto).pipe(delay(150));
+  }
+
+  private listAnnotationsDryRun$(imageId: string): Observable<ListAnnotationsResponseDto> {
+    if (imageId !== this.DEFAULT_IMAGE_ID) {
+      return of({ success: true, annotations: [] } satisfies ListAnnotationsResponseDto).pipe(delay(100));
+    }
+
+    return of({
+      success: true,
+      annotations: [
+        {
+          id: 'mock_ann_bbox_1',
+          imageId,
+          defectLabel: 'Rayure profonde',
+          severity: 'Critique',
+          description: 'Mock: rayure profonde détectée sur le carter moteur.',
+          geometryType: 'bbox',
+          geometry: {
+            type: 'bbox',
+            bbox: { nx: 0.2, ny: 0.2, nw: 0.2, nh: 0.15 },
+          },
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        },
+        {
+          id: 'mock_ann_polygon_1',
+          imageId,
+          defectLabel: "Défaut d'usinage (Bavure)",
+          severity: 'Majeur',
+          description: 'Mock: bavure détectée en zone de perçage.',
+          geometryType: 'polygon',
+          geometry: {
+            type: 'polygon',
+            polygon: {
+              points: [
+                { nx: 0.55, ny: 0.5 },
+                { nx: 0.65, ny: 0.5 },
+                { nx: 0.6, ny: 0.6 },
+              ],
+              closed: true,
+            },
+          },
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        },
+      ],
+    } satisfies ListAnnotationsResponseDto).pipe(delay(150));
+  }
 
   private registerImageHttp$(image: ImageModel): Observable<RegisterImageResponseDto> {
     return this.http.post<RegisterImageResponseDto>(
@@ -1237,7 +1417,7 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
     this.clearRemoteFeedback();
     this.isSavingRemote.set(true);
 
-    this.deletePersistedAnnotationHttp$(id).subscribe({
+    this.deletePersistedAnnotationRequest$(id).subscribe({
       next: (response) => {
         if (!response.success) {
           this.handleSaveFailure('La suppression ne s’est pas faite.');
@@ -1255,8 +1435,10 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
         this.showSaveToast('success', 'Annotation supprimée.');
         this.persistWorkspaceState();
         this.drawAnnotationsOnly();
-        const ci = this.currentImage();
-        if (ci) this.refreshAnnotationsForImage(ci.id);
+        if (!this.USE_MOCK_API) {
+          const ci = this.currentImage();
+          if (ci) this.refreshAnnotationsForImage(ci.id);
+        }
       },
       error: () => {
         this.handleSaveFailure('La suppression ne s’est pas faite.');
@@ -1464,7 +1646,7 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
     this.isSavingRemote.set(true);
 
     try {
-      const response = await firstValueFrom(this.saveToBackendHttp$(dto));
+      const response = await firstValueFrom(this.saveAnnotationsRequest$(dto));
 
       if (!response.success) {
         this.handleSaveFailure("L'enregistrement ne s'est pas fait.");
@@ -1475,8 +1657,10 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
       const remaining = this.kanbanItems().length;
       this.remoteSaveSuccess.set(remaining === 0 ? 'Enregistrement préparé.' : 'Enregistrement partiel préparé.');
       this.showSaveToast(remaining === 0 ? 'success' : 'error', remaining === 0 ? 'Enregistrement réussi.' : 'Enregistrement partiel : certains éléments restent dans le kanban.');
-      const currentId = this.currentImage()?.id;
-      if (currentId) this.refreshAnnotationsForImage(currentId);
+      if (!this.USE_MOCK_API) {
+        const currentId = this.currentImage()?.id;
+        if (currentId) this.refreshAnnotationsForImage(currentId);
+      }
 
       this.currentWorkId.set(null);
       this.persistWorkspaceState();
@@ -1487,6 +1671,80 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
     } finally {
       this.isSavingRemote.set(false);
     }
+  }
+
+  downloadAnnotationsJson(): void {
+    const image = this.currentImage();
+    const annotations = this.imageAnnotations();
+    if (!image || annotations.length === 0) return;
+
+    const exportData = {
+      image: {
+        id: image.id,
+        name: image.name,
+        format: image.format,
+        size: image.size ?? null,
+        width: image.width,
+        height: image.height,
+        createdAt: image.createdAt,
+      },
+      metadata: {
+        annotationCount: annotations.length,
+        source: 'imageAnnotations',
+      },
+      exportDate: new Date().toISOString(),
+      annotations: annotations.map((annotation) => ({
+        id: annotation.id,
+        imageId: annotation.imageId,
+        shape: annotation.shape,
+        defectLabel: annotation.def,
+        severity: annotation.sev,
+        description: annotation.desc,
+        geometry: annotation.geometry,
+      })),
+    };
+
+    this.downloadTextFile(
+      `annotations_${this.annotationExportFileNameBase(image)}.json`,
+      JSON.stringify(exportData, null, 2),
+      'application/json;charset=utf-8',
+    );
+  }
+
+  downloadAnnotationsCsv(): void {
+    const image = this.currentImage();
+    const annotations = this.imageAnnotations();
+    if (!image || annotations.length === 0) return;
+
+    const header = [
+      'id',
+      'imageId',
+      'shape',
+      'defectLabel',
+      'severity',
+      'description',
+      'geometryType',
+      'geometry',
+    ];
+    const rows = annotations.map((annotation) => [
+      annotation.id,
+      annotation.imageId,
+      annotation.shape,
+      annotation.def,
+      annotation.sev,
+      annotation.desc,
+      annotation.geometry.type,
+      JSON.stringify(annotation.geometry),
+    ]);
+    const csv = [header, ...rows]
+      .map((row) => row.map((cell) => this.escapeCsvCell(cell)).join(','))
+      .join('\n');
+
+    this.downloadTextFile(
+      `annotations_${this.annotationExportFileNameBase(image)}.csv`,
+      csv,
+      'text/csv;charset=utf-8',
+    );
   }
 
   private buildSaveRequestDto(): SaveAnnotationsRequestDto {
@@ -1981,8 +2239,7 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
 
   private loadImagesFromBackend(): void {
     if (!this.isBrowser) return;
-    this.http.get<ListImagesResponseDto>(`${this.apiBaseUrl}/api/images`)
-      .pipe(timeout(10000))
+    this.listImagesRequest$()
       .subscribe({
         next: (response) => {
           if (!response.success || !response.images) return;
@@ -1994,7 +2251,7 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
           }));
           this.imageList.set(images);
           if (images.length > 0) {
-            this.selectImageById(images[0].id);
+            this.selectLoadedImage(images[0]);
           }
         },
         error: (err: unknown) => console.error('[VISTA] Failed to load images from backend', err),
@@ -2002,8 +2259,7 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
   }
 
   private refreshAnnotationsForImage(imageId: string): void {
-    this.http.get<ListAnnotationsResponseDto>(`${this.apiBaseUrl}/api/images/${imageId}/annotations`)
-      .pipe(timeout(10000))
+    this.listAnnotationsRequest$(imageId)
       .subscribe({
         next: (response) => {
           if (!response.success) return;
@@ -2878,6 +3134,36 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
     if (bytes >= mb) return `${(bytes / mb).toFixed(1)} MB`;
     if (bytes >= kb) return `${(bytes / kb).toFixed(1)} KB`;
     return `${bytes} B`;
+  }
+
+  private annotationExportFileNameBase(image: ImageModel): string {
+    const withoutExtension = image.name.replace(/\.[^/.\\]+$/, '');
+    const cleaned = withoutExtension
+      .replace(/[^a-zA-Z0-9_-]+/g, '_')
+      .replace(/^_+|_+$/g, '');
+
+    return cleaned || image.id;
+  }
+
+  private escapeCsvCell(value: string): string {
+    return `"${value.replace(/"/g, '""')}"`;
+  }
+
+  private downloadTextFile(fileName: string, content: string, mimeType: string): void {
+    if (!this.isBrowser) return;
+
+    const blob = new Blob([content], { type: mimeType });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+
+    link.href = url;
+    link.download = fileName;
+    link.style.display = 'none';
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+
+    setTimeout(() => URL.revokeObjectURL(url), 0);
   }
 
   private tryBuildPolygonFromFreehand(points: NormPoint[]): NormPoint[] | null {
