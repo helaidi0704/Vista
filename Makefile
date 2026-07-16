@@ -29,7 +29,7 @@ test-integration:
 	uv run pytest tests/integration
 
 docker-up:
-	cd infra/infra/docker && docker-compose up -d
+	cd infra/infra/docker && docker compose --env-file ../../../.env up -d
 
 docker-down:
-	cd infra/infra/docker && docker-compose down
+	cd infra/infra/docker && docker compose --env-file ../../../.env down
