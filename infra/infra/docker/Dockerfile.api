@@ -1,0 +1,26 @@
+FROM python:3.10-slim
+
+# 🚨 IMPORTANT : bon chemin
+WORKDIR /apps/apps/api
+
+ENV PYTHONPATH=/apps/apps/api
+ENV PYTHONUNBUFFERED=1
+
+RUN mkdir -p /app/data/audio
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    postgresql-client \
+    gcc \
+    libpq-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY apps/api/requirements.txt .
+
+RUN pip install --no-cache-dir --upgrade pip && \
+    pip install --no-cache-dir -r requirements.txt
+
+COPY apps/api .
+
+EXPOSE 8000
+
+CMD ["sh", "-c", "yoyo apply --batch --database \"$DATABASE_URL\" /apps/apps/api/migrations && uvicorn app.main:app --host 0.0.0.0 --port 8000"]

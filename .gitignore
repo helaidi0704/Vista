@@ -2,3 +2,17 @@
 # image registration endpoint). Keep the folder tracked via data/.gitkeep,
 # but never commit actual uploaded content.
 data/images/
+.env
+infra/.env
+*_bcp*
+*_bkp*
+# Python cache
+__pycache__/
+*.pyc
+
+# Playwright outputs
+tests/screenshots/
+tests/videos/
+
+# OS
+.DS_Store

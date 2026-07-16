@@ -1,14 +1,20 @@
 services:
+
+  # ========================
+  # DATABASE (PostgreSQL)
+  # ========================
   db:
     image: postgres:16-alpine
     container_name: vista-db
     restart: unless-stopped
+    env_file:
+      - ../../.env
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-vista}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-vista}
       POSTGRES_DB: ${POSTGRES_DB:-vista}
     ports:
-      - "5442:5432"
+      - "${DB_PORT:-5442}:5432"
     volumes:
       - vista_db_data:/var/lib/postgresql/data
     healthcheck:
@@ -16,6 +22,86 @@ services:
       interval: 5s
       timeout: 5s
       retries: 10
+
+  # ========================
+  # REDIS
+  # ========================
+  redis:
+    image: redis:7
+    container_name: docker-redis-1
+    ports:
+      - "6379:6379"
+
+  # ========================
+  # BACKEND (FastAPI)
+  # ========================
+  api:
+    build:
+      context: ../../..
+      dockerfile: infra/infra/docker/Dockerfile.api
+    container_name: docker-api-1
+    env_file:
+      - ../../.env
+    environment:
+      DATABASE_URL: postgresql://${DB_USER}:${DB_PASSWORD}@db:5432/${DB_NAME}
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      - "8000:8000"
+
+  # ========================
+  # FRONTEND (Angular)
+  # ========================
+  ui:
+    build:
+      context: ../../..
+      dockerfile: infra/infra/docker/Dockerfile.ui
+    container_name: docker-ui-1
+    working_dir: /app/frontend
+    ports:
+      - "4200:4200"
+    depends_on:
+      - api
+    command: >
+      sh -c "
+        echo '📦 Installing frontend deps...' &&
+        npm install --legacy-peer-deps &&
+        echo '🚀 Starting Angular...' &&
+        npx ng serve --host 0.0.0.0 --port 4200 --disable-host-check
+      "
+
+  # ========================
+  # PLAYWRIGHT
+  # ========================
+  playwright:
+    image: mcr.microsoft.com/playwright/python:v1.61.0-jammy
+    container_name: docker-playwright
+    working_dir: /app
+    volumes:
+      - ../../..:/app
+
+    depends_on:
+      - ui
+      - api
+
+    environment:
+      - PYTHONUNBUFFERED=1
+      - BASE_URL=http://ui:4200
+
+    command: >
+      sh -c "
+        echo '⏳ Waiting for UI (HTTP)...' &&
+        until curl -s http://ui:4200 > /dev/null; do
+          sleep 3
+        done &&
+        echo '✅ UI is reachable' &&
+        echo '⏳ Waiting Angular build...' &&
+        sleep 15 &&
+        echo '✅ Running tests' &&
+        pip install pytest playwright==1.61.0 &&
+        pytest -s tests
+      "
 
 volumes:
   vista_db_data:
