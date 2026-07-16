@@ -2,22 +2,28 @@
 
 ## Avec Docker Compose
 
-L'environnement complet peut être démarré via Docker.
+Seule la base de données PostgreSQL est actuellement fournie via Docker Compose.
+Le backend (FastAPI, dans `backend/`) et le frontend (Angular, dans `frontend/`)
+se lancent pour l'instant directement avec `uv run` / `npm start` (voir le
+README racine), pas encore via ce Compose.
 
 ```bash
-cd infra/docker
+cd infra/infra/docker
 docker-compose up -d
 ```
 
 ### Services démarrés :
-- **db** : PostgreSQL (port 5432)
-- **redis** : Message Broker & Cache (port 6379)
-- **api** : Backend FastAPI (port 8000)
-- **ui** : Frontend Next.js (port 3000)
+- **db** : PostgreSQL 16 (port hôte **5442** → 5432 dans le conteneur, pour éviter les conflits avec
+  d'autres instances Postgres locales ; utilisateur/mot de passe/DB par défaut : `vista`/`vista`/`vista`)
+
+### TODO (non implémenté)
+- **redis** : Message Broker & Cache — pas encore nécessaire (aucun worker Celery en place)
+- **api** : Backend FastAPI packagé en conteneur
+- **ui** : Frontend Angular packagé en conteneur (⚠️ ce fichier mentionnait auparavant à tort "Next.js" — le frontend est Angular)
 
 ## Variables d'Environnement
-Assurez-vous d'avoir créé le fichier `.env` à la racine du projet avant de lancer Docker Compose.
 
-```bash
-cp ../../.env.example ../../.env
-```
+Les variables `POSTGRES_USER`, `POSTGRES_PASSWORD`, `POSTGRES_DB` peuvent être surchargées via un
+fichier `.env` placé dans `infra/infra/docker/` (Docker Compose le charge automatiquement). Le
+backend lit sa propre configuration (dont `DATABASE_URL`) depuis `backend/.env` — voir
+`backend/.env.example`.

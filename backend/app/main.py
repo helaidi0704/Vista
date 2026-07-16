@@ -1,8 +1,11 @@
 from fastapi import FastAPI, Request
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from starlette import status
 
+from app.api.annotations import router as annotations_router
 from app.api.health import router as health_router
+from app.api.images import router as images_router
 from app.core.config import get_settings
 
 
@@ -16,6 +19,23 @@ def create_app() -> FastAPI:
         redoc_url="/redoc",
         openapi_url="/openapi.json",
     )
+
+    if settings.environment == "local":
+        app.add_middleware(
+            CORSMiddleware,
+            allow_origin_regex=r"^https?://localhost(:\d+)?$",
+            allow_credentials=True,
+            allow_methods=["*"],
+            allow_headers=["*"],
+        )
+    else:
+        app.add_middleware(
+            CORSMiddleware,
+            allow_origins=["http://localhost:4200"],
+            allow_credentials=True,
+            allow_methods=["*"],
+            allow_headers=["*"],
+        )
 
     @app.exception_handler(Exception)
     async def unhandled_exception_handler(
@@ -43,6 +63,8 @@ def create_app() -> FastAPI:
         }
 
     app.include_router(health_router)
+    app.include_router(images_router, prefix=settings.api_prefix)
+    app.include_router(annotations_router, prefix=settings.api_prefix)
     return app
 
 

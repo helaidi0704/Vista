@@ -1,26 +1,26 @@
-version: "3.9"
-
 services:
 
   # ========================
   # DATABASE (PostgreSQL)
   # ========================
   db:
-    image: postgres:15
-    container_name: docker-db-1
+    image: postgres:16-alpine
+    container_name: vista-db
+    restart: unless-stopped
     env_file:
-      - ../../.env
+      - ../../../.env
     environment:
-      POSTGRES_PASSWORD: ${DB_PASSWORD}
-      POSTGRES_USER: ${DB_USER}
-      POSTGRES_DB: ${DB_NAME}
+      POSTGRES_USER: ${POSTGRES_USER:-vista}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-vista}
+      POSTGRES_DB: ${POSTGRES_DB:-vista}
     ports:
-      - "${DB_PORT}:5432"
+      - "${DB_PORT:-5442}:5432"
     volumes:
-      - postgres_data:/var/lib/postgresql/data
+      - vista_db_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${DB_USER} -d ${DB_NAME}"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-vista} -d ${POSTGRES_DB:-vista}"]
       interval: 5s
+      timeout: 5s
       retries: 10
 
   # ========================
@@ -41,7 +41,7 @@ services:
       dockerfile: infra/infra/docker/Dockerfile.api
     container_name: docker-api-1
     env_file:
-      - ../../.env
+      - ../../../.env
     environment:
       DATABASE_URL: postgresql://${DB_USER}:${DB_PASSWORD}@db:5432/${DB_NAME}
     depends_on:
@@ -104,4 +104,4 @@ services:
       "
 
 volumes:
-  postgres_data:
+  vista_db_data:

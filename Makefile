@@ -12,13 +12,13 @@ help:
 setup:
 	@echo "Installation des dépendances avec uv..."
 	uv sync
-	@if [ -d "apps/annotation-ui" ]; then cd apps/annotation-ui && npm install; fi
+	@if [ -d "frontend" ]; then cd frontend && npm install; fi
 
 dev-ui:
-	cd apps/annotation-ui && npm run dev
+	cd frontend && npm start
 
 dev-api:
-	cd apps/api && uv run uvicorn main:app --reload --port 8000
+	cd backend && uv run uvicorn app.main:app --reload --port 8000
 
 test: test-unit test-integration
 
@@ -29,7 +29,7 @@ test-integration:
 	uv run pytest tests/integration
 
 docker-up:
-	cd infra/docker && docker-compose up -d
+	cd infra/infra/docker && docker compose --env-file ../../../.env up -d
 
 docker-down:
-	cd infra/docker && docker-compose down
+	cd infra/infra/docker && docker compose --env-file ../../../.env down
