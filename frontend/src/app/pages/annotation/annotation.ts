@@ -425,7 +425,9 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
     setTimeout(() => {
       this.setupDrawingInteraction();
 
-      if (this.isBrowser && this.restoreWorkspaceFromStorage()) {
+      const hadLocalState = this.isBrowser && this.restoreWorkspaceFromStorage();
+
+      if (hadLocalState) {
         const img = this.currentImage();
         if (img) {
           this.loadImageFromSrc(img.src, true);
@@ -433,6 +435,8 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
           this.drawBaseImage();
           this.drawAnnotationsOnly();
         }
+        // Reconcile local state with backend: prune images that no longer exist on the server.
+        this.reconcileLocalStateWithBackend();
       } else {
         this.loadImagesFromBackend();
       }
@@ -1171,6 +1175,18 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
         return body;
       }),
       catchError((error: unknown) => {
+        // If the image is already deleted from the backend (404), treat it as a
+        // successful deletion — the caller will clean up localStorage.
+        const status = (error as { status?: number })?.status;
+        if (status === 404) {
+          return of({
+            success: true,
+            requestId: this.createRequestId(),
+            deletedImageId: imageId,
+            backendMessage: 'Image was already removed from server.',
+            receivedAt: new Date().toISOString(),
+          } satisfies DeleteImageResponseDto);
+        }
         console.error('[VISTA][API] deleteImage failed', error);
         return throwError(() => new Error('DELETE_IMAGE_BACKEND_FAILED'));
       }),
@@ -2256,6 +2272,85 @@ export class AnnotationComponent implements AfterViewInit, OnDestroy {
         },
         error: (err: unknown) => console.error('[VISTA] Failed to load images from backend', err),
       });
+  }
+
+  /**
+   * After restoring workspace from localStorage, validate that each locally cached
+   * image still exists on the backend. Stale images (deleted from DB but still in
+   * localStorage) are pruned silently.
+   */
+  private reconcileLocalStateWithBackend(): void {
+    if (!this.isBrowser) return;
+    this.listImagesRequest$().subscribe({
+      next: (response) => {
+        if (!response?.images) return;
+        const backendIds = new Set(response.images.map((img) => img.id));
+        const localImages = this.imageList();
+        const staleIds = localImages.filter((img) => !backendIds.has(img.id)).map((img) => img.id);
+
+        if (staleIds.length === 0) return;
+
+        // Remove stale images from signal
+        this.imageList.update((list) => list.filter((img) => !staleIds.includes(img.id)));
+
+        // If the current image is stale, clear it
+        const current = this.currentImage();
+        if (current && staleIds.includes(current.id)) {
+          this.clearCurrentImageContextOnly();
+          const remaining = this.imageList();
+          if (remaining.length > 0) {
+            this.selectLoadedImage(remaining[0]);
+          }
+        }
+
+        // Prune stale entries from localStorage
+        this.purgeStaleEntriesFromStorage(staleIds);
+      },
+      error: () => {
+        // Backend unreachable — keep local state as-is.
+      },
+    });
+  }
+
+  private purgeStaleEntriesFromStorage(staleIds: string[]): void {
+    const state = this.readWorkspaceState();
+    if (!state) return;
+
+    const remainingIds = new Set(
+      state.imageOrderIds.filter((id) => !staleIds.includes(id)),
+    );
+
+    const nextState: PersistedAnnotationWorkspaceV3 = {
+      ...state,
+      currentImageId: state.currentImageId && !staleIds.includes(state.currentImageId)
+        ? state.currentImageId
+        : (remainingIds.size > 0 ? [...remainingIds][0] : null),
+      imageOrderIds: [...remainingIds],
+      images: Object.fromEntries(
+        Object.entries(state.images).filter(([id]) => !staleIds.includes(id)),
+      ),
+      annotationsByImageId: Object.fromEntries(
+        Object.entries(state.annotationsByImageId).filter(([id]) => !staleIds.includes(id)),
+      ),
+      viewByImageId: Object.fromEntries(
+        Object.entries(state.viewByImageId).filter(([id]) => !staleIds.includes(id)),
+      ),
+      draftsByImageId: Object.fromEntries(
+        Object.entries(state.draftsByImageId).filter(([id]) => !staleIds.includes(id)),
+      ),
+      editorByImageId: Object.fromEntries(
+        Object.entries(state.editorByImageId).filter(([id]) => !staleIds.includes(id)),
+      ),
+      kanbanByImageId: Object.fromEntries(
+        Object.entries(state.kanbanByImageId).filter(([id]) => !staleIds.includes(id)),
+      ),
+    };
+
+    try {
+      localStorage.setItem(this.STORAGE_KEY, JSON.stringify(nextState));
+    } catch {
+      // ignore
+    }
   }
 
   private refreshAnnotationsForImage(imageId: string): void {

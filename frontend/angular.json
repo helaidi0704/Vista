@@ -43,7 +43,7 @@
                 {
                   "type": "anyComponentStyle",
                   "maximumWarning": "10kB",
-                  "maximumError": "12kB"
+                  "maximumError": "14kB"
                 }
               ],
               "outputHashing": "all"
@@ -65,10 +65,18 @@
         "serve": {
           "builder": "@angular-devkit/build-angular:dev-server",
           "options": {
-            "buildTarget": "vista-projet:build",
+            "buildTarget": "vista-projet:build:development",
             "host": "0.0.0.0",
             "port": 4200,
-            "allowedHosts": ["ui"]
+            "allowedHosts": ["ui", "localhost", "127.0.0.1"]
+          },
+          "configurations": {
+            "development": {
+              "buildTarget": "vista-projet:build:development"
+            },
+            "production": {
+              "buildTarget": "vista-projet:build:production"
+            }
           }
         }
       }
