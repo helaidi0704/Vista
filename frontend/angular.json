@@ -18,7 +18,7 @@
             "browser": "src/main.ts",
             "polyfills": [],
             "tsConfig": "tsconfig.app.json",
-            "assets": [],
+            "assets": [{ "glob": "**/*", "input": "public" }],
             "styles": [
               "src/styles.scss"
             ],
@@ -67,7 +67,7 @@
           "options": {
             "buildTarget": "vista-projet:build:development",
             "host": "0.0.0.0",
-            "port": 4200,
+            "port": 4201,
             "allowedHosts": ["ui", "localhost", "127.0.0.1"]
           },
           "configurations": {

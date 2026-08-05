@@ -18,7 +18,9 @@ dev-ui:
 	cd frontend && npm start
 
 dev-api:
-	cd backend && uv run uvicorn app.main:app --reload --port 8000
+	@API_PORT=$$(grep -m1 '^API_PORT=' .env 2>/dev/null | cut -d= -f2); \
+	API_PORT=$${API_PORT:-8001}; \
+	cd backend && uv run uvicorn app.main:app --reload --port $$API_PORT
 
 test: test-unit test-integration
 
@@ -29,7 +31,7 @@ test-integration:
 	uv run pytest tests/integration
 
 docker-up:
-	cd infra/infra/docker && docker compose --env-file ../../../.env up -d
+	cd infra/docker && docker compose --env-file ../../.env up -d
 
 docker-down:
-	cd infra/infra/docker && docker compose --env-file ../../../.env down
+	cd infra/docker && docker compose --env-file ../../.env down

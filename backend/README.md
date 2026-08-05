@@ -9,7 +9,7 @@ backed by PostgreSQL via SQLAlchemy + Alembic.
 ## Setup
 From the repo root, start a local PostgreSQL instance:
 ```
-docker compose -f infra/infra/docker/docker-compose.yml up -d
+docker compose -f infra/docker/docker-compose.yml up -d db
 ```
 From the `backend/` directory, install dependencies and apply migrations:
 ```
@@ -19,16 +19,21 @@ uv run alembic upgrade head
 `uv run alembic upgrade head` creates the `app` PostgreSQL schema (users, defect_classes,
 datasets, images, annotations — see [docs/database/schema_v1.md](../docs/database/schema_v1.md))
 and seeds the 5 `defect_classes` rows used by the frontend's defect dropdown.
-Copy `.env.example` to `.env` and adjust `DATABASE_URL` if your local Postgres isn't on the
-default `docker-compose` port (5442).
+Database connection settings (`DB_HOST`, `DB_PORT`, `DB_USER`, `DB_PASSWORD`, `DB_NAME`) come
+from the repo root `.env`, not from `backend/.env` — copy [`.env.example`](../.env.example) at
+the repo root to `.env` and adjust `DB_PORT` there if your local Postgres isn't on the default
+`docker-compose` port (5442). `backend/.env` (copy `backend/.env.example`) only holds
+backend-process settings (`SERVICE_NAME`, `ENVIRONMENT`, `API_PREFIX`, `DATA_DIR`).
 ## Run locally
-uv run uvicorn app.main:app --host 127.0.0.1 --port 8000 --reload
+Prefer `make dev-api` from the repo root — it reads `API_PORT` from the repo-root `.env`
+automatically. Running uvicorn directly here uses the default port only:
+uv run uvicorn app.main:app --host 127.0.0.1 --port 8001 --reload
 The backend will be available at:
-http://127.0.0.1:8000
+http://127.0.0.1:8001
 Health check:
-GET http://127.0.0.1:8000/health
+GET http://127.0.0.1:8001/health
 Interactive API documentation:
-http://127.0.0.1:8000/docs
+http://127.0.0.1:8001/docs
 ## Endpoints
 | Method | Path | Description |
 |---|---|---|
@@ -37,7 +42,7 @@ http://127.0.0.1:8000/docs
 | DELETE | `/api/images/{imageId}` | Delete an image and cascade-delete its annotations |
 | POST | `/api/images/save-annotations` | Create/update annotations for an image |
 | DELETE | `/api/annotations/{id}` | Delete a persisted annotation |
-CORS is enabled for `http://localhost:4200` (the Angular dev server).
+CORS is enabled for `http://localhost:4201` (the Angular dev server).
 ## Database migrations
 ```
 uv run alembic revision --autogenerate -m "description"   # create a new migration

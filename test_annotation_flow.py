@@ -1,7 +1,7 @@
 import os
 from playwright.sync_api import sync_playwright
 
-BASE_URL = os.getenv("BASE_URL", "http://localhost:4200")
+BASE_URL = os.getenv("BASE_URL", "http://localhost:4201")
 TEST_IMAGE = "tests/sample.jpg"
 
 

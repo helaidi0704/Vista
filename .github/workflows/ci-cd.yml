@@ -8,7 +8,7 @@ on:
   workflow_dispatch:
 
 env:
-  DOCKER_COMPOSE_FILE: ./infra/infra/docker/docker-compose.yml
+  DOCKER_COMPOSE_FILE: ./infra/docker/docker-compose.yml
   ENV_FILE: ./infra/.env
 
 jobs:
@@ -108,14 +108,14 @@ jobs:
       # ----------------------
       - name: Test API
         run: |
-          curl -f http://localhost:8000
+          curl -f http://localhost:8001
 
       # ----------------------
       # TEST FRONTEND
       # ----------------------
       - name: Test Frontend
         run: |
-          curl -f http://localhost:4200
+          curl -f http://localhost:4201
 
       # ----------------------
       # 🔥 PLAYWRIGHT TESTS

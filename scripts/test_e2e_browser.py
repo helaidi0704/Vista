@@ -1,7 +1,7 @@
 """Complete 14-step live test: full annotation CRUD cycle."""
 import requests
 
-BASE = "http://127.0.0.1:8000"
+BASE = "http://127.0.0.1:8001"
 B64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
 
 print("=== LIVE TEST: Full Annotation CRUD Cycle ===")

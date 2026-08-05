@@ -11,19 +11,18 @@ across boundaries.
 
 | Path | Role | Stack |
 |---|---|---|
-| `apps/api` | FastAPI backend (API, orchestration, DB access, background workers) | Python / FastAPI / SQLAlchemy / Celery |
+| `backend` | FastAPI backend (annotation module: API, DB access via SQLAlchemy/Alembic) | Python / FastAPI / SQLAlchemy |
 | `frontend` | Angular web application (annotation UI, training/testing/deployment pages) | Angular 21 / TypeScript |
-| `libs/dataset-utils`, `libs/image-utils`, `libs/ml-utils` | Shared Python libraries reused by `apps/api` and `services/*` | Python |
+| `libs/dataset-utils`, `libs/image-utils`, `libs/ml-utils` | Shared Python libraries reused by `backend` and `services/*` | Python |
 | `services/image-processing` | Image processing worker/service (filters, augmentations, batch processing) | Python / OpenCV / Pillow / Albumentations |
 | `services/ml-core` | Offline ML pipeline: training, evaluation, experiment tracking | Python |
-| `infra/infra/docker`, `infra/infra/ci` | Docker Compose and CI/CD documentation and configuration | Docker / GitHub Actions |
+| `infra/docker`, `infra/ci` | Docker Compose and CI/CD documentation and configuration | Docker / GitHub Actions |
 | `docs/database` | PostgreSQL schema documentation (`app` and `ai` schemas) | DBML / Markdown |
 | `tests` | Test suite for the Python codebase (`tests/unit`, `tests/integration` by convention) | pytest |
 
-Several of these directories (`apps/api/app/*`, `libs/*`, `services/*`) currently only
-contain scaffolding (empty folders with `.gitkeep`). When implementing features there,
-follow the intended role of the folder described above rather than improvising a new
-structure.
+Several of these directories (`libs/*`, `services/*`) currently only contain scaffolding
+(empty folders with `.gitkeep`). When implementing features there, follow the intended
+role of the folder described above rather than improvising a new structure.
 
 ## General Principles
 
@@ -41,7 +40,7 @@ structure.
 - This project uses a Jira-first workflow (see `CONTRIBUTING.md`/`GOVERNANCE.md`).
   Don't fabricate ticket numbers; leave branch/commit message conventions to the user.
 
-## Python / FastAPI (`apps/api`, `libs/*`, `services/*`)
+## Python / FastAPI (`backend`, `libs/*`, `services/*`)
 
 - Target Python `3.12.8` (see `pyproject.toml`). Use modern type hints (`list[str]`,
   `X | None`, etc.), not `typing.List`/`typing.Optional`.
@@ -50,13 +49,12 @@ structure.
 - Formatting/linting: `black` (line length 88) and `ruff` (line length 88, target
   `py312`) are configured in `pyproject.toml`. Follow their defaults; don't reformat
   unrelated code.
-- Structure FastAPI code using the existing `apps/api/app` layout:
+- Structure FastAPI code using the existing `backend/app` layout:
   - `api/` — routers / endpoint definitions
   - `core/` — settings, config, security, shared app setup
   - `repositories/` — data access (SQLAlchemy queries)
   - `schemas/` — Pydantic models (request/response DTOs)
   - `services/` — business logic
-  - `workers/` — Celery tasks / background jobs
 - Use Pydantic v2 (`pydantic`, `pydantic-settings`) idioms (`model_config`, `Field`, etc.).
 - Database access goes through SQLAlchemy; respect the two-schema design documented in
   `docs/database/schema_v1.md` (`app` = business/annotation data, `ai` = ML data). `ai`
@@ -91,7 +89,7 @@ Follow `frontend/AGENTS.md` for Angular-specific conventions, summarized here:
 - Keep experiments reproducible: track configs, seeds, and parameters explicitly
   rather than relying on globals or implicit defaults.
 - Treat `services/ml-core` as an offline pipeline that consumes data exported by the
-  API; it should not depend on `apps/api` internals directly — depend on shared code
+  API; it should not depend on `backend` internals directly — depend on shared code
   in `libs/*` instead.
 - Prefer configuration files (under `services/ml-core/configs`) over hard-coded
   hyperparameters.
@@ -123,6 +121,6 @@ Follow `frontend/AGENTS.md` for Angular-specific conventions, summarized here:
 
 - When behavior, setup steps, or the database schema change, update the corresponding
   docs (`README.md`, `docs/database/schema_v1.md`, `services/ml-core/README.md`,
-  `infra/infra/*/README.md`) in the same change — don't leave docs stale.
+  `infra/*/README.md`) in the same change — don't leave docs stale.
 - Do not add new top-level documentation files unless explicitly requested; prefer
   updating existing ones.

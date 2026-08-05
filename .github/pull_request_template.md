@@ -4,9 +4,9 @@ Veuillez inclure un résumé des changements et du problème résolu.
 **Ticket Jira:** [RND-SCOPE-XXX](LINK)
 
 ## Architecture & Impact
-- [ ] Frontend (`apps/annotation-ui`)
-- [ ] Backend (`apps/api`)
-- [ ] ML/Audio (`services/ml-core`, `services/audio-processing`)
+- [ ] Frontend (`frontend`)
+- [ ] Backend (`backend`)
+- [ ] ML/Image processing (`services/ml-core`, `services/image-processing`)
 - [ ] Infrastructure/CI
 
 ## Checklist technique

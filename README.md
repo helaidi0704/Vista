@@ -23,16 +23,13 @@ image analysis tasks.
 
 ```text
 vista/
-├── apps/
-│   └── api/                 # FastAPI backend (orchestrator, DB access)
-│       ├── app/
-│       │   ├── api/         # Routers / endpoints
-│       │   ├── core/        # Settings, config, shared app setup
-│       │   ├── repositories/# Data access (SQLAlchemy)
-│       │   ├── schemas/     # Pydantic models
-│       │   ├── services/    # Business logic
-│       │   └── workers/     # Celery background tasks
-│       └── utils/
+├── backend/                   # FastAPI backend (annotation module, implemented)
+│   └── app/
+│       ├── api/              # Routers / endpoints
+│       ├── core/             # Settings, config, shared app setup
+│       ├── repositories/     # Data access (SQLAlchemy)
+│       ├── schemas/          # Pydantic models
+│       └── services/         # Business logic
 │
 ├── frontend/                 # Angular 21 web application (SSR-enabled)
 │   └── src/app/
@@ -51,9 +48,9 @@ vista/
 ├── docs/
 │   └── database/              # PostgreSQL schema (schema_v1.dbml / schema_v1.md)
 │
-├── infra/infra/
+├── infra/
 │   ├── ci/                    # CI/CD documentation
-│   └── docker/                # Docker Compose documentation
+│   └── docker/                # Docker Compose setup (db, redis, api, ui, playwright)
 │
 ├── configs/                   # Global project configuration (placeholder)
 ├── data/                       # Local data storage (placeholder, Git LFS-tracked types)
@@ -68,12 +65,11 @@ vista/
 | Path | Role | Status |
 |---|---|---|
 | `backend` | FastAPI backend (annotation module) | Implemented — health check + the 4 annotation endpoints (`/api/images`, `/api/images/{id}`, `/api/images/save-annotations`, `/api/annotations/{id}`), backed by PostgreSQL via SQLAlchemy/Alembic. See [backend/README.md](backend/README.md). |
-| `apps/api` | FastAPI backend (documented target layout) | Scaffolding only — folders exist, no Python source yet. `backend/` is the active implementation for now; consolidating the two is a TODO. |
 | `frontend` | Angular frontend | Implemented — Angular 21 app with SSR, page scaffolds, and a working Annotation module calling the real backend over HTTP |
 | `libs/dataset-utils`, `libs/image-utils`, `libs/ml-utils` | Shared Python libraries | Scaffolding only |
 | `services/image-processing` | Image processing service | Scaffolding only |
 | `services/ml-core` | ML core / training pipeline | Scaffolding only (see [services/ml-core/README.md](services/ml-core/README.md)) |
-| `infra/infra/docker`, `infra/infra/ci` | Infra documentation | `infra/infra/docker/docker-compose.yml` provides a local PostgreSQL `db` service; `api`/`ui`/`redis` containers are still TODO |
+| `infra/docker`, `infra/ci` | Infra documentation | `infra/docker/docker-compose.yml` provides `db`, `redis`, `api` (builds `backend/`), `ui` (builds `frontend/`), and a `playwright` e2e runner |
 | `docs/database` | Database schema documentation | Implemented — see [docs/database/schema_v1.md](docs/database/schema_v1.md) |
 | `tests` | Test suite | Placeholder — no tests written yet (backend tests live under [backend/tests](backend/tests) instead) |
 
@@ -99,7 +95,7 @@ vista/
 | [uv](https://github.com/astral-sh/uv) | latest | Python dependency/environment manager used across the repo |
 | Node.js | 18+ | Required for the Angular frontend (see [frontend/package.json](frontend/package.json)) |
 | npm | 10.x | `frontend/package.json` pins `packageManager: npm@10.8.2` |
-| Docker | latest | Used to run a local PostgreSQL instance; see [infra/infra/docker/README.md](infra/infra/docker/README.md) |
+| Docker | latest | Used to run the full stack (db/redis/api/ui); see [infra/docker/README.md](infra/docker/README.md) |
 
 ### 1. Install dependencies
 
@@ -126,7 +122,7 @@ full details). It has its own `pyproject.toml`/virtual environment, separate fro
 workspace. Start a local PostgreSQL instance, apply migrations, then run the API:
 
 ```bash
-docker compose -f infra/infra/docker/docker-compose.yml up -d
+docker compose -f infra/docker/docker-compose.yml up -d db
 cd backend
 uv sync
 uv run alembic upgrade head
@@ -136,21 +132,26 @@ uv run alembic upgrade head
 make dev-api
 ```
 
-`make dev-api` runs `cd backend && uv run uvicorn app.main:app --reload --port 8000`. The API
-is then available at `http://localhost:8000` (docs at `/docs`), matching the contract in
+`make dev-api` runs `cd backend && uv run uvicorn app.main:app --reload --port $API_PORT`,
+reading `API_PORT` from the repo-root `.env` (defaults to `8001` if unset). The API is then
+available at `http://localhost:$API_PORT` (docs at `/docs`), matching the contract in
 [docs/VISTA_Contrat_Interface_Annotation_V02.md](docs/VISTA_Contrat_Interface_Annotation_V02.md).
-
-> **Note**: `apps/api/app/*` still only contains the intended folder structure (`api`, `core`,
-> `repositories`, `schemas`, `services`, `workers`) documented as the long-term target layout;
-> `backend/` is the actively developed implementation for now.
 
 ### 3. Frontend (`frontend`)
 
 ```bash
 cd frontend
 npm install
-npm start        # ng serve — http://localhost:4200
+npm start        # ng serve, on UI_PORT from the repo-root .env — http://localhost:4201 by default
 ```
+
+`npm start` runs [frontend/scripts/dev-server.js](frontend/scripts/dev-server.js), which reads
+`UI_PORT`/`API_PORT` from the repo-root `.env` and regenerates `frontend/public/api-config.json`
+(gitignored) accordingly. The app fetches that file at startup (see
+[frontend/src/app/core/api-config.ts](frontend/src/app/core/api-config.ts)) to resolve the
+backend URL, so the frontend dev server always targets the backend port you actually configured
+instead of a hardcoded default — and no git-tracked source file needs to be rewritten per
+developer.
 
 Other scripts available in [frontend/package.json](frontend/package.json):
 
@@ -183,8 +184,8 @@ Commands below come from [Makefile](Makefile), [pyproject.toml](pyproject.toml),
 | Command | Description |
 |---|---|
 | `uv sync` | Install/refresh root Python dependencies |
-| `make setup` | `uv sync` + `npm install` (TODO: still references the old `apps/annotation-ui` path, not `frontend`) |
-| `make dev-api` | Run the FastAPI backend (`cd backend && uv run uvicorn app.main:app --reload --port 8000`) |
+| `make setup` | `uv sync` + `npm install` (in `frontend/`) |
+| `make dev-api` | Run the FastAPI backend (`cd backend && uv run uvicorn app.main:app --reload --port 8001`) |
 | `cd backend && uv run alembic upgrade head` | Apply database migrations (requires the `db` container from `make docker-up`) |
 | `cd backend && uv run pytest` | Run backend tests (16 tests covering health + the 4 annotation endpoints) |
 | `cd frontend && npm start` | Run the Angular frontend dev server |
@@ -195,7 +196,7 @@ Commands below come from [Makefile](Makefile), [pyproject.toml](pyproject.toml),
 | `uv run black .` | Format Python code ([tool.black] configured in `pyproject.toml`, line length 88) |
 | `uv run ruff check .` | Lint Python code ([tool.ruff] configured in `pyproject.toml`, line length 88) |
 | `cd backend && uv run ruff check .` | Lint the `backend/` package (its own `pyproject.toml`, line length 100) |
-| `make docker-up` / `make docker-down` | Start/stop the local PostgreSQL container (`infra/infra/docker/docker-compose.yml`) |
+| `make docker-up` / `make docker-down` | Start/stop the full Docker stack (`infra/docker/docker-compose.yml`) |
 
 ---
 
@@ -203,8 +204,8 @@ Commands below come from [Makefile](Makefile), [pyproject.toml](pyproject.toml),
 
 - [docs/database/schema_v1.md](docs/database/schema_v1.md) — PostgreSQL schema (`app`/`ai`) documentation.
 - [services/ml-core/README.md](services/ml-core/README.md) — Role of the ML core pipeline.
-- [infra/infra/docker/README.md](infra/infra/docker/README.md) — Intended Docker Compose setup.
-- [infra/infra/ci/README.md](infra/infra/ci/README.md) — CI/CD overview.
+- [infra/docker/README.md](infra/docker/README.md) — Docker Compose setup.
+- [infra/ci/README.md](infra/ci/README.md) — CI/CD overview.
 - [frontend/README.md](frontend/README.md) — Angular CLI usage reference.
 - [frontend/AGENTS.md](frontend/AGENTS.md) — Angular coding conventions.
 

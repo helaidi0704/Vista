@@ -8,17 +8,19 @@ services:
     container_name: vista-db
     restart: unless-stopped
     env_file:
-      - ../../../.env
+      - ../../.env
     environment:
-      POSTGRES_USER: ${POSTGRES_USER:-vista}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-vista}
-      POSTGRES_DB: ${POSTGRES_DB:-vista}
+      # postgres:16-alpine's own init script requires these exact names; map them
+      # from our DB_* convention so .env only ever carries one set of names.
+      POSTGRES_USER: ${DB_USER:-vista}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-vista}
+      POSTGRES_DB: ${DB_NAME:-vista}
     ports:
       - "${DB_PORT:-5442}:5432"
     volumes:
       - vista_db_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-vista} -d ${POSTGRES_DB:-vista}"]
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-vista} -d ${DB_NAME:-vista}"]
       interval: 5s
       timeout: 5s
       retries: 10
@@ -37,36 +39,41 @@ services:
   # ========================
   api:
     build:
-      context: ../../..
-      dockerfile: infra/infra/docker/Dockerfile.api
+      context: ../..
+      dockerfile: infra/docker/Dockerfile.api
     container_name: docker-api-1
     env_file:
-      - ../../../.env
+      - ../../.env
     environment:
       DATABASE_URL: postgresql://${DB_USER}:${DB_PASSWORD}@db:5432/${DB_NAME}
     depends_on:
       db:
         condition: service_healthy
     ports:
-      - "8000:8000"
+      - "${API_PORT:-8001}:8000"
+    volumes:
+      - ../../data:/app/data
 
   # ========================
   # FRONTEND (Angular)
   # ========================
   ui:
     build:
-      context: ../../..
-      dockerfile: infra/infra/docker/Dockerfile.ui
+      context: ../..
+      dockerfile: infra/docker/Dockerfile.ui
     container_name: docker-ui-1
-    working_dir: /app/frontend
+    working_dir: /app
+    env_file:
+      - ../../.env
     ports:
-      - "4200:4200"
+      - "${UI_PORT:-4201}:4200"
     depends_on:
       - api
     command: >
       sh -c "
         echo '📦 Installing frontend deps...' &&
         npm install --legacy-peer-deps &&
+        node scripts/generate-api-config.js &&
         echo '🚀 Starting Angular...' &&
         npx ng serve --host 0.0.0.0 --port 4200 --disable-host-check
       "
@@ -79,7 +86,7 @@ services:
     container_name: docker-playwright
     working_dir: /app
     volumes:
-      - ../../..:/app
+      - ../..:/app
 
     depends_on:
       - ui
