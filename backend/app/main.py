@@ -3,6 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from starlette import status
 
+from app.api.analysis import router as analysis_router
 from app.api.annotations import router as annotations_router
 from app.api.health import router as health_router
 from app.api.images import router as images_router
@@ -65,6 +66,7 @@ def create_app() -> FastAPI:
     app.include_router(health_router)
     app.include_router(images_router, prefix=settings.api_prefix)
     app.include_router(annotations_router, prefix=settings.api_prefix)
+    app.include_router(analysis_router, prefix=settings.api_prefix)
     return app
 
 

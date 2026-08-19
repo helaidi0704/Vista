@@ -101,20 +101,85 @@
 
   </div>
 
-  <!-- ── Coherence Warning (VIS-113) ───────────────────────────────────────── -->
-  <div *ngIf="coherenceIssues().length" class="card"
-       style="margin-bottom:16px;padding:10px 14px;border:1px solid rgba(255,165,0,0.4);background:rgba(255,165,0,0.07);">
-    <div style="display:flex;align-items:flex-start;gap:10px;">
-      <span style="font-size:16px;margin-top:1px;flex-shrink:0;">⚠️</span>
-      <div>
-        <div style="font-size:12px;font-weight:600;color:orange;margin-bottom:4px;">Incohérence détectée entre les deux images</div>
-        <div *ngFor="let issue of coherenceIssues()" style="font-size:11px;color:var(--text-secondary);margin-bottom:2px;">
-          <strong>{{ issue.field }}</strong> — Cible : {{ issue.target }} · Référence : {{ issue.reference }}
+  <!-- ── Validation de cohérence (VIS-113) ────────────────────────────────── -->
+  <ng-container *ngIf="coherenceAnalysis() as ca">
+    <div *ngIf="!coherenceDismissed()" class="card" style="margin-bottom:16px;overflow:hidden;"
+         [style.border]="ca.status === 'compatible' ? '1px solid rgba(0,229,160,0.35)' :
+                          ca.status === 'adjustable' ? '1px solid rgba(255,165,0,0.4)'  :
+                                                       '1px solid rgba(255,69,103,0.45)'">
+
+      <!-- Header -->
+      <div style="display:flex;justify-content:space-between;align-items:center;padding:10px 14px;border-bottom:1px solid var(--border);"
+           [style.background]="ca.status === 'compatible' ? 'rgba(0,229,160,0.06)'  :
+                                ca.status === 'adjustable' ? 'rgba(255,165,0,0.06)'  :
+                                                             'rgba(255,69,103,0.06)'">
+        <span style="font-size:12px;font-weight:600;">Validation de cohérence</span>
+        <span class="tag"
+              [class.tag-green]="ca.status === 'compatible'"
+              [style.background]="ca.status === 'adjustable' ? 'rgba(255,165,0,0.15)' : ''"
+              [style.color]="ca.status === 'adjustable' ? 'orange' : ''"
+              [style.border]="ca.status === 'adjustable' ? '1px solid rgba(255,165,0,0.5)' : ''"
+              [class.tag-red]="ca.status === 'incompatible'">
+          {{ ca.status === 'compatible' ? '● Compatible' :
+             ca.status === 'adjustable' ? '● Ajustement requis' : '✕ Incompatible' }}
+        </span>
+      </div>
+
+      <!-- Table -->
+      <table style="width:100%;border-collapse:collapse;font-size:11px;">
+        <thead>
+          <tr style="background:var(--bg-secondary);">
+            <th style="padding:7px 14px;text-align:left;color:var(--text-muted);font-weight:600;width:30%;">Caractéristique</th>
+            <th style="padding:7px 14px;text-align:left;color:var(--text-muted);font-weight:600;width:30%;">Image Cible</th>
+            <th style="padding:7px 14px;text-align:left;color:var(--text-muted);font-weight:600;width:30%;">Golden Reference</th>
+            <th style="padding:7px 14px;text-align:center;width:10%;"></th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr *ngFor="let row of ca.rows; let i = index"
+              [style.border-top]="i > 0 ? '1px solid var(--border)' : 'none'">
+            <td style="padding:8px 14px;font-weight:600;color:var(--text-secondary);">{{ row.field }}</td>
+            <td style="padding:8px 14px;font-family:monospace;"
+                [style.color]="row.status !== 'ok' ? (row.status === 'error' ? 'var(--red)' : 'orange') : ''">
+              {{ row.targetVal }}
+            </td>
+            <td style="padding:8px 14px;font-family:monospace;"
+                [style.color]="row.status !== 'ok' ? (row.status === 'error' ? 'var(--red)' : 'orange') : ''">
+              {{ row.refVal }}
+            </td>
+            <td style="padding:8px 14px;text-align:center;">
+              <span *ngIf="row.status === 'ok'"    style="color:var(--green);font-size:14px;">✓</span>
+              <span *ngIf="row.status === 'warning'" style="color:orange;font-size:14px;">≈</span>
+              <span *ngIf="row.status === 'error'"  style="color:var(--red);font-size:14px;">✕</span>
+            </td>
+          </tr>
+        </tbody>
+      </table>
+
+      <!-- Footer message + actions -->
+      <div *ngIf="ca.status !== 'compatible'"
+           style="padding:10px 14px;border-top:1px solid var(--border);display:flex;align-items:center;gap:12px;flex-wrap:wrap;"
+           [style.background]="ca.status === 'adjustable' ? 'rgba(255,165,0,0.04)' : 'rgba(255,69,103,0.04)'">
+        <span style="font-size:12px;flex:1;"
+              [style.color]="ca.status === 'adjustable' ? 'orange' : 'var(--red)'">
+          ⚠ {{ ca.message }}
+        </span>
+        <div style="display:flex;gap:8px;flex-shrink:0;">
+          <ng-container *ngIf="ca.status === 'adjustable'">
+            <select class="btn btn-sm btn-secondary" style="padding:4px 8px;font-size:11px;">
+              <option>Bicubic</option><option>Bilinear</option><option>Nearest</option>
+            </select>
+            <button class="btn btn-sm btn-primary">Redimensionner</button>
+            <button class="btn btn-sm btn-secondary" (click)="coherenceDismissed.set(true)">Ignorer</button>
+          </ng-container>
+          <ng-container *ngIf="ca.status === 'incompatible'">
+            <button class="btn btn-sm btn-secondary">Assistant de conversion</button>
+            <button class="btn btn-sm btn-secondary" (click)="openPicker('reference')">Charger d'autres images</button>
+          </ng-container>
         </div>
-        <div style="font-size:10px;color:var(--text-muted);margin-top:4px;">Les résultats d'analyse peuvent être incorrects avec des images de dimensions différentes.</div>
       </div>
     </div>
-  </div>
+  </ng-container>
 
   <!-- ── Analysis Tabs ──────────────────────────────────────────────────────── -->
   <div style="display:flex;gap:4px;margin-bottom:16px;background:var(--bg-secondary);border-radius:var(--radius-sm);padding:4px;width:fit-content;flex-wrap:wrap;">
@@ -128,11 +193,29 @@
   <div class="card" style="margin-bottom:16px;padding:12px 16px;">
     <div style="display:flex;gap:16px;align-items:center;flex-wrap:wrap;">
       <strong style="font-size:12px;color:var(--text-secondary);">Filtres synchrones :</strong>
-      <label style="display:flex;align-items:center;gap:6px;font-size:12px;"><input type="checkbox"> Grayscale</label>
-      <label style="display:flex;align-items:center;gap:6px;font-size:12px;"><input type="checkbox"> Égaliser Histogramme</label>
+      <label style="display:flex;align-items:center;gap:6px;font-size:12px;cursor:pointer;">
+        <input type="checkbox" [checked]="filterGrayscale()"
+               (change)="filterGrayscale.set($any($event.target).checked)"> Grayscale
+      </label>
+      <label style="display:flex;align-items:center;gap:6px;font-size:12px;cursor:pointer;">
+        <input type="checkbox" [checked]="filterHistEq()"
+               (change)="filterHistEq.set($any($event.target).checked)">
+        Égaliser Histogramme
+        <span *ngIf="computingHistEq()" style="font-size:10px;color:var(--text-muted);">(calcul…)</span>
+      </label>
       <div style="width:1px;height:16px;background:var(--border);"></div>
       <strong style="font-size:12px;color:var(--text-secondary);">Luminosité / Contraste :</strong>
-      <input type="range" style="width:80px;accent-color:var(--accent);">
+      <input type="range" min="50" max="200" step="5" [value]="filterBrightness()"
+             (input)="onBrightnessChange($event)"
+             style="width:100px;accent-color:var(--accent);">
+      <span style="font-size:11px;color:var(--text-muted);min-width:28px;">
+        {{ filterBrightness() === 100 ? 'Normal' : (filterBrightness() > 100 ? '+' : '') + (filterBrightness() - 100) + '%' }}
+      </span>
+      <button *ngIf="filterBrightness() !== 100 || filterGrayscale() || filterHistEq()"
+              class="btn btn-sm btn-secondary"
+              (click)="filterGrayscale.set(false); filterHistEq.set(false); filterBrightness.set(100)">
+        Réinitialiser
+      </button>
     </div>
   </div>
 
@@ -148,12 +231,17 @@
   <!-- ── Comparaison Côte à Côte ────────────────────────────────────────────── -->
   <ng-container *ngIf="(targetImage() || referenceImage()) && activeTab() === analysisTabs[0]">
     <div class="grid-2" style="gap:12px;">
+
       <div class="card" style="padding:10px;">
-        <div class="card-header" style="margin-bottom:8px;">
+        <div class="card-header" style="margin-bottom:8px;display:flex;justify-content:space-between;align-items:center;">
           <span class="card-title" style="font-size:12px;">Image Cible</span>
+          <span *ngIf="filterHistEq() || filterGrayscale() || filterBrightness() !== 100"
+                class="tag" style="font-size:9px;background:rgba(var(--accent-rgb,99,102,241),0.15);">Filtres actifs</span>
         </div>
         <div style="height:280px;border-radius:6px;overflow:hidden;background:var(--bg-secondary);display:flex;align-items:center;justify-content:center;">
-          <img *ngIf="targetImage()" [src]="imageUrl(targetImage()!.src)"
+          <img *ngIf="targetImage()"
+               [src]="filterHistEq() && targetEqUrl() ? targetEqUrl()! : imageUrl(targetImage()!.src)"
+               [style.filter]="filterHistEq() ? (filterBrightness() !== 100 ? 'brightness(' + filterBrightness()/100 + ')' : 'none') : imageCssFilter()"
                style="width:100%;height:100%;object-fit:contain;" [alt]="targetImage()!.name">
           <span *ngIf="!targetImage()" style="font-size:12px;color:var(--text-muted);">Aucune image cible</span>
         </div>
@@ -165,11 +253,15 @@
       </div>
 
       <div class="card" style="padding:10px;">
-        <div class="card-header" style="margin-bottom:8px;">
+        <div class="card-header" style="margin-bottom:8px;display:flex;justify-content:space-between;align-items:center;">
           <span class="card-title" style="font-size:12px;">Golden Reference</span>
+          <span *ngIf="filterHistEq() || filterGrayscale() || filterBrightness() !== 100"
+                class="tag" style="font-size:9px;background:rgba(var(--accent-rgb,99,102,241),0.15);">Filtres actifs</span>
         </div>
         <div style="height:280px;border-radius:6px;overflow:hidden;background:var(--bg-secondary);display:flex;align-items:center;justify-content:center;">
-          <img *ngIf="referenceImage()" [src]="imageUrl(referenceImage()!.src)"
+          <img *ngIf="referenceImage()"
+               [src]="filterHistEq() && referenceEqUrl() ? referenceEqUrl()! : imageUrl(referenceImage()!.src)"
+               [style.filter]="filterHistEq() ? (filterBrightness() !== 100 ? 'brightness(' + filterBrightness()/100 + ')' : 'none') : imageCssFilter()"
                style="width:100%;height:100%;object-fit:contain;" [alt]="referenceImage()!.name">
           <span *ngIf="!referenceImage()" style="font-size:12px;color:var(--text-muted);">Aucune référence sélectionnée</span>
         </div>
@@ -179,6 +271,7 @@
           <span>{{ formatSize(referenceImage()!.size) }}</span>
         </div>
       </div>
+
     </div>
   </ng-container>
 
@@ -319,6 +412,115 @@
           <img [src]="fftImageUrl()" alt="FFT Spectrum"
                style="max-width:512px;width:100%;border-radius:6px;image-rendering:pixelated;">
         </div>
+      </div>
+    </ng-container>
+  </ng-container>
+
+  <!-- ── Data Augmentation Test — FastAPI + Pillow ────────────────────────── -->
+  <ng-container *ngIf="activeTab() === analysisTabs[3]">
+
+    <div *ngIf="!targetImage()" class="card"
+         style="padding:40px;text-align:center;border:1px dashed var(--border);">
+      <div style="font-size:32px;margin-bottom:10px;opacity:0.3;">🔄</div>
+      <div style="font-size:13px;color:var(--text-muted);">Sélectionnez une image cible pour tester les augmentations</div>
+    </div>
+
+    <ng-container *ngIf="targetImage()">
+      <!-- Config panel -->
+      <div class="card" style="padding:14px 16px;margin-bottom:12px;">
+        <div style="display:flex;gap:16px;flex-wrap:wrap;align-items:flex-start;">
+
+          <!-- Transformations -->
+          <div>
+            <div style="font-size:11px;font-weight:600;color:var(--text-secondary);margin-bottom:8px;">Transformations</div>
+            <div style="display:flex;flex-direction:column;gap:6px;">
+              <label style="display:flex;align-items:center;gap:8px;font-size:12px;cursor:pointer;">
+                <input type="checkbox" [checked]="augCrop()" (change)="augCrop.set($any($event.target).checked)">
+                Crop aléatoire
+              </label>
+              <label style="display:flex;align-items:center;gap:8px;font-size:12px;cursor:pointer;">
+                <input type="checkbox" [checked]="augRotation()" (change)="augRotation.set($any($event.target).checked)">
+                Rotation
+              </label>
+              <label style="display:flex;align-items:center;gap:8px;font-size:12px;cursor:pointer;">
+                <input type="checkbox" [checked]="augMixup()" [disabled]="!referenceImage()"
+                       (change)="augMixup.set($any($event.target).checked)">
+                Mixup
+                <span *ngIf="!referenceImage()" style="font-size:10px;color:var(--text-muted);">(référence requise)</span>
+              </label>
+              <label style="display:flex;align-items:center;gap:8px;font-size:12px;cursor:pointer;">
+                <input type="checkbox" [checked]="augCutout()" (change)="augCutout.set($any($event.target).checked)">
+                Cutout 20%
+              </label>
+            </div>
+          </div>
+
+          <div style="width:1px;background:var(--border);align-self:stretch;"></div>
+
+          <!-- Params -->
+          <div style="display:flex;flex-direction:column;gap:10px;">
+            <div style="font-size:11px;font-weight:600;color:var(--text-secondary);margin-bottom:-2px;">Paramètres</div>
+            <div style="display:flex;align-items:center;gap:8px;font-size:12px;">
+              <span style="min-width:90px;">Rotation ±</span>
+              <input type="range" min="5" max="45" step="5" [value]="augRotRange()"
+                     (input)="onAugRotRangeChange($event)" style="width:80px;accent-color:var(--accent);">
+              <span style="font-weight:600;min-width:30px;">{{ augRotRange() }}°</span>
+            </div>
+            <div style="display:flex;align-items:center;gap:8px;font-size:12px;">
+              <span style="min-width:90px;">Mixup α</span>
+              <input type="range" min="10" max="50" step="5" [value]="augMixAlpha() * 100"
+                     (input)="onAugMixAlphaChange($event)" style="width:80px;accent-color:var(--accent);">
+              <span style="font-weight:600;min-width:30px;">{{ augMixAlpha() | number:'1.1-1' }}</span>
+            </div>
+            <div style="display:flex;align-items:center;gap:8px;font-size:12px;">
+              <span style="min-width:90px;">Crop ratio</span>
+              <input type="range" min="50" max="95" step="5" [value]="augCropRatio() * 100"
+                     (input)="onAugCropRatioChange($event)" style="width:80px;accent-color:var(--accent);">
+              <span style="font-weight:600;min-width:30px;">{{ (augCropRatio() * 100) | number:'1.0-0' }}%</span>
+            </div>
+          </div>
+
+          <div style="margin-left:auto;display:flex;align-items:flex-end;">
+            <button class="btn btn-primary" [disabled]="augLoading()" (click)="generateAugmentations()">
+              {{ augLoading() ? 'Génération…' : '▶ Générer aperçus' }}
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Error -->
+      <div *ngIf="augError()" class="card"
+           style="padding:12px 16px;margin-bottom:12px;border:1px solid rgba(255,69,103,0.4);background:rgba(255,69,103,0.07);font-size:12px;color:var(--red);">
+        ⚠️ {{ augError() }}
+      </div>
+
+      <!-- Loading -->
+      <div *ngIf="augLoading()" class="card" style="padding:48px;text-align:center;">
+        <div style="font-size:13px;color:var(--text-muted);">Génération des augmentations (backend Pillow)…</div>
+      </div>
+
+      <!-- Previews grid -->
+      <div *ngIf="!augLoading() && augPreviews().length" class="card" style="padding:14px;">
+        <div class="card-header" style="margin-bottom:12px;">
+          <span class="card-title" style="font-size:12px;">Aperçus — {{ augPreviews().length }} variantes</span>
+        </div>
+        <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:12px;">
+          <div *ngFor="let p of augPreviews()" style="border-radius:8px;overflow:hidden;border:1px solid var(--border);">
+            <div style="height:160px;background:var(--bg-secondary);overflow:hidden;">
+              <img [src]="p.src" [alt]="p.label" style="width:100%;height:100%;object-fit:contain;">
+            </div>
+            <div style="padding:8px 10px;">
+              <div style="font-size:11px;font-weight:600;">{{ p.label }}</div>
+              <div style="font-size:9px;color:var(--text-muted);margin-top:2px;">{{ p.params }}</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Empty state before generation -->
+      <div *ngIf="!augLoading() && !augPreviews().length && !augError()" class="card"
+           style="padding:40px;text-align:center;border:1px dashed var(--border);">
+        <div style="font-size:13px;color:var(--text-muted);">Configure les transformations puis clique sur <strong>Générer aperçus</strong></div>
       </div>
     </ng-container>
   </ng-container>

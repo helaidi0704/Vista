@@ -62,4 +62,22 @@ export class AnalyzeService {
   imageFileUrl(relativeSrc: string): string {
     return `${this.apiBase}${relativeSrc}`;
   }
+
+  augmentImage(payload: {
+    imageId: string;
+    referenceId?: string;
+    crop: boolean;
+    rotation: boolean;
+    mixup: boolean;
+    cutout: boolean;
+    rotationRange: number;
+    mixupAlpha: number;
+    cropRatio: number;
+  }): Observable<{ label: string; src: string; params: string }[]> {
+    return this.http
+      .post<{ success: boolean; previews: { label: string; src: string; params: string }[] }>(
+        `${this.apiBase}/api/analysis/augment`, payload
+      )
+      .pipe(map(res => res.previews));
+  }
 }

@@ -15,10 +15,21 @@ import { AnalyzeService, ImageLibraryItem, SUPPORTED_EXTENSIONS, mimeToFormat } 
 
 type PickerSlot = 'target' | 'reference';
 
-interface CoherenceIssue {
+type FieldStatus = 'ok' | 'warning' | 'error';
+type CoherenceStatus = 'compatible' | 'adjustable' | 'incompatible';
+
+interface CoherenceRow {
   field: string;
-  target: string;
-  reference: string;
+  targetVal: string;
+  refVal: string;
+  status: FieldStatus;
+}
+
+interface CoherenceAnalysis {
+  status: CoherenceStatus;
+  rows: CoherenceRow[];
+  message: string;
+  dimRatio: number; // max(w1/w2, w2/w1)
 }
 
 interface DiffStats {
@@ -73,6 +84,25 @@ export class AnalyzeComponent implements OnInit {
   readonly uploading = signal(false);
   readonly uploadError = signal<string | null>(null);
 
+  // ── Filtres synchrones ────────────────────────────────────────────────────
+  readonly filterGrayscale  = signal(false);
+  readonly filterHistEq     = signal(false);
+  readonly filterBrightness = signal(100); // 50–200, 100 = normal
+
+  // CSS filter applied to <img> tags in the comparison view
+  readonly imageCssFilter = computed(() => {
+    const parts: string[] = [];
+    if (this.filterGrayscale()) parts.push('grayscale(1)');
+    const b = this.filterBrightness() / 100;
+    if (b !== 1) parts.push(`brightness(${b.toFixed(2)}) contrast(${(0.5 + b * 0.5).toFixed(2)})`);
+    return parts.join(' ') || 'none';
+  });
+
+  // Histogram-equalized image URLs (null when filter is off)
+  readonly targetEqUrl    = signal<string | null>(null);
+  readonly referenceEqUrl = signal<string | null>(null);
+  readonly computingHistEq = signal(false);
+
   // ── Superposition (Difference) ─────────────────────────────────────────────
   readonly diffImageUrl   = signal<string | null>(null);
   readonly diffStats = signal<DiffStats | null>(null);
@@ -97,6 +127,46 @@ export class AnalyzeComponent implements OnInit {
   readonly fftSlot      = signal<'target' | 'reference'>('target');
   readonly fftSize      = signal<number>(256);
 
+  // ── Data Augmentation ─────────────────────────────────────────────────────
+  readonly augPreviews   = signal<{ label: string; src: string; params: string }[]>([]);
+  readonly augLoading    = signal(false);
+  readonly augError      = signal<string | null>(null);
+  readonly augCrop       = signal(true);
+  readonly augRotation   = signal(true);
+  readonly augMixup      = signal(false);
+  readonly augCutout     = signal(true);
+  readonly augRotRange   = signal(15);
+  readonly augMixAlpha   = signal(0.2);
+  readonly augCropRatio  = signal(0.8);
+
+  generateAugmentations(): void {
+    const t = this.targetImage();
+    if (!t) return;
+    this.augLoading.set(true);
+    this.augError.set(null);
+    this.service.augmentImage({
+      imageId: t.id,
+      referenceId: this.referenceImage()?.id,
+      crop: this.augCrop(),
+      rotation: this.augRotation(),
+      mixup: this.augMixup(),
+      cutout: this.augCutout(),
+      rotationRange: this.augRotRange(),
+      mixupAlpha: this.augMixAlpha(),
+      cropRatio: this.augCropRatio(),
+    }).subscribe({
+      next: previews => { this.augPreviews.set(previews); this.augLoading.set(false); },
+      error: err => {
+        this.augError.set(err?.error?.backendMessage ?? 'Erreur lors de la génération.');
+        this.augLoading.set(false);
+      },
+    });
+  }
+
+  onAugRotRangeChange(e: Event): void { this.augRotRange.set(+(e.target as HTMLInputElement).value); }
+  onAugMixAlphaChange(e: Event): void { this.augMixAlpha.set(+(e.target as HTMLInputElement).value / 100); }
+  onAugCropRatioChange(e: Event): void { this.augCropRatio.set(+(e.target as HTMLInputElement).value / 100); }
+
   // ── Extraction Contours (Sobel / Canny) ───────────────────────────────────
   readonly contourImageUrl  = signal<string | null>(null);
   readonly computingContour = signal(false);
@@ -111,24 +181,66 @@ export class AnalyzeComponent implements OnInit {
   private contourH = 0;
   private contourCachedId: string | null = null;
 
-  // Coherence validation
-  readonly coherenceIssues = computed<CoherenceIssue[]>(() => {
+  // Dismiss coherence panel (Ignorer button)
+  readonly coherenceDismissed = signal(false);
+
+  // Coherence validation — rich analysis
+  readonly coherenceAnalysis = computed<CoherenceAnalysis | null>(() => {
     const t = this.targetImage();
     const r = this.referenceImage();
-    if (!t || !r) return [];
+    if (!t || !r) return null;
 
-    const issues: CoherenceIssue[] = [];
-    if (t.width !== r.width || t.height !== r.height) {
-      issues.push({
+    const channels = (fmt: string) => fmt.toUpperCase() === 'PNG' ? 'RGB (3)' : 'RGB (3)';
+    const bitDepth = () => '8 bits/canal';
+    const dimRatioW = t.width  / r.width;
+    const dimRatioH = t.height / r.height;
+    const dimRatio  = Math.max(dimRatioW, 1 / dimRatioW, dimRatioH, 1 / dimRatioH);
+    const sameDim   = t.width === r.width && t.height === r.height;
+    const sameFmt   = t.format === r.format;
+
+    const rows: CoherenceRow[] = [
+      {
         field: 'Dimensions',
-        target: `${t.width}×${t.height}px`,
-        reference: `${r.width}×${r.height}px`,
-      });
+        targetVal: `${t.width} × ${t.height}`,
+        refVal: `${r.width} × ${r.height}`,
+        status: sameDim ? 'ok' : dimRatio > 3 ? 'error' : 'warning',
+      },
+      {
+        field: 'Canaux',
+        targetVal: channels(t.format),
+        refVal: channels(r.format),
+        status: 'ok',
+      },
+      {
+        field: 'Profondeur de bits',
+        targetVal: bitDepth(),
+        refVal: bitDepth(),
+        status: 'ok',
+      },
+      {
+        field: 'Format',
+        targetVal: t.format,
+        refVal: r.format,
+        status: sameFmt ? 'ok' : 'warning',
+      },
+    ];
+
+    let status: CoherenceStatus;
+    let message: string;
+
+    if (sameDim && sameFmt) {
+      status  = 'compatible';
+      message = 'Les deux images sont parfaitement compatibles pour l\'analyse.';
+    } else if (dimRatio <= 3) {
+      status  = 'adjustable';
+      const pct = Math.round((dimRatio - 1) * 100);
+      message = `Dimensions différentes (${pct}% d'écart). Redimensionnement recommandé pour comparaison précise.`;
+    } else {
+      status  = 'incompatible';
+      message = `Écart trop important (dimensions ${dimRatio.toFixed(1)}×). Comparaison non fiable en l'état.`;
     }
-    if (t.format !== r.format) {
-      issues.push({ field: 'Format', target: t.format, reference: r.format });
-    }
-    return issues;
+
+    return { status, rows, message, dimRatio };
   });
 
   constructor() {
@@ -165,6 +277,15 @@ export class AnalyzeComponent implements OnInit {
     effect(() => {
       this.diffAmplification(); // track dependency
       if (this.pixelData1 && this.pixelData2 && this.isBrowser) this.applyDiffMath();
+    });
+
+    // Effect: histogram equalization — recompute when images or toggle change
+    effect(() => {
+      const histEq = this.filterHistEq();
+      const target = this.targetImage();
+      const ref    = this.referenceImage();
+      if (!histEq) { this.targetEqUrl.set(null); this.referenceEqUrl.set(null); return; }
+      if (this.isBrowser) this.computeHistEq(target, ref);
     });
 
     // Effect 3: FFT tab — load + compute on tab/image/slot/size change
@@ -233,10 +354,12 @@ export class AnalyzeComponent implements OnInit {
       this.referenceImage.set(image);
       this.referenceLoadError.set(false);
     }
+    this.coherenceDismissed.set(false);
     this.showPicker.set(false);
   }
 
   triggerFileInput(): void {
+    if (!this.isBrowser || !this.fileInputRef?.nativeElement) return;
     this.uploadError.set(null);
     this.fileInputRef.nativeElement.value = '';
     this.fileInputRef.nativeElement.click();
@@ -285,8 +408,8 @@ export class AnalyzeComponent implements OnInit {
     reader.readAsDataURL(file);
   }
 
-  clearTarget(): void { this.targetImage.set(null); this.targetLoadError.set(false); }
-  clearReference(): void { this.referenceImage.set(null); this.referenceLoadError.set(false); }
+  clearTarget(): void { this.targetImage.set(null); this.targetLoadError.set(false); this.coherenceDismissed.set(false); }
+  clearReference(): void { this.referenceImage.set(null); this.referenceLoadError.set(false); this.coherenceDismissed.set(false); }
 
   onTargetError(): void { this.targetLoadError.set(true); }
   onReferenceError(): void { this.referenceLoadError.set(true); }
@@ -312,6 +435,67 @@ export class AnalyzeComponent implements OnInit {
     if (bytes < 1024) return `${bytes} B`;
     if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} Ko`;
     return `${(bytes / (1024 * 1024)).toFixed(1)} Mo`;
+  }
+
+  // ── Sync Filters handlers ──────────────────────────────────────────────────
+
+  onBrightnessChange(e: Event): void {
+    this.filterBrightness.set(+(e.target as HTMLInputElement).value);
+  }
+
+  // Histogram equalization via Canvas API (no backend)
+  private async computeHistEq(
+    target: import('./analyze.service').ImageLibraryItem | null,
+    ref:    import('./analyze.service').ImageLibraryItem | null,
+  ): Promise<void> {
+    this.computingHistEq.set(true);
+    try {
+      const [tUrl, rUrl] = await Promise.all([
+        target ? this.equalizeImage(this.imageUrl(target.src)) : Promise.resolve(null),
+        ref    ? this.equalizeImage(this.imageUrl(ref.src))    : Promise.resolve(null),
+      ]);
+      this.targetEqUrl.set(tUrl);
+      this.referenceEqUrl.set(rUrl);
+    } catch { /* ignore, show original */ }
+    finally { this.computingHistEq.set(false); }
+  }
+
+  private async equalizeImage(url: string): Promise<string> {
+    const img = await this.loadImageViaBlobUrl(url);
+    const W = img.naturalWidth, H = img.naturalHeight;
+    const c = this.drawOffscreen(img, W, H, false);
+    const ctx = c.getContext('2d')!;
+    const id = ctx.getImageData(0, 0, W, H);
+    const data = id.data;
+    const n = W * H;
+
+    // Build luminance histogram
+    const hist = new Uint32Array(256);
+    for (let i = 0; i < n; i++) {
+      const lum = Math.round(0.299 * data[i*4] + 0.587 * data[i*4+1] + 0.114 * data[i*4+2]);
+      hist[lum]++;
+    }
+    // Cumulative distribution function
+    const cdf = new Uint32Array(256);
+    cdf[0] = hist[0];
+    for (let i = 1; i < 256; i++) cdf[i] = cdf[i-1] + hist[i];
+    const cdfMin = cdf.find(v => v > 0) ?? 0;
+    // LUT: equalized value for each luminance
+    const lut = new Uint8Array(256);
+    for (let i = 0; i < 256; i++)
+      lut[i] = Math.round((cdf[i] - cdfMin) / (n - cdfMin) * 255);
+
+    // Apply LUT preserving hue (scale each channel proportionally)
+    for (let i = 0; i < n; i++) {
+      const r = data[i*4], g = data[i*4+1], b = data[i*4+2];
+      const lum = Math.round(0.299 * r + 0.587 * g + 0.114 * b);
+      const scale = lum > 0 ? lut[lum] / lum : 1;
+      data[i*4]   = Math.min(255, r * scale);
+      data[i*4+1] = Math.min(255, g * scale);
+      data[i*4+2] = Math.min(255, b * scale);
+    }
+    ctx.putImageData(id, 0, 0);
+    return c.toDataURL('image/png');
   }
 
   // Public: force reload and recompute (Recalculer button)
