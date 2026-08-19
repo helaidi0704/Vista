@@ -1,55 +1,166 @@
+<input #fileInput type="file" [accept]="supportedExtensions" style="display:none" (change)="onFileSelected($event)">
+
 <div class="fade-in">
-  <div style="display:flex;gap:12px;align-items:center;margin-bottom:20px;flex-wrap:wrap;">
-    <div style="display:flex;gap:8px;flex:1;flex-wrap:wrap;">
-      <ng-container *ngFor="let f of imageFiles; index as i">
-        <div class="card" style="display:flex;align-items:center;gap:10px;padding:10px 14px;flex:1;min-width:200px;"
-             [style.background]="i === 0 ? 'rgba(255,69,103,0.1)' : 'rgba(0,229,160,0.1)'"
-             [style.border]="i === 0 ? '1px solid var(--red)' : '1px solid var(--green)'">
-          <div style="width:28px;height:28px;border-radius:6px;display:flex;align-items:center;justify-content:center;font-size:12px;"
-               [style.background]="i === 0 ? 'rgba(255,69,103,0.1)' : 'rgba(0,229,160,0.1)'"
-               [style.border]="i === 0 ? '1px solid var(--red)' : '1px solid var(--green)'">🖼️</div>
-          <div style="flex:1;min-width:0;">
-            <div style="font-size:12px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">{{ f.name }}</div>
+
+  <!-- ── Image Selection Panel ─────────────────────────────────────────────── -->
+  <div class="grid-2" style="margin-bottom:16px;gap:12px;">
+
+    <!-- Target Image Slot -->
+    <div class="card" style="padding:12px;transition:border-color 0.2s;"
+         [style.border]="targetImage() ? '1px solid var(--red)' : '1px solid var(--border)'"
+         [style.background]="targetImage() ? 'rgba(255,69,103,0.04)' : ''">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
+        <span class="card-title" style="font-size:12px;">Image Cible</span>
+        <div style="display:flex;gap:6px;">
+          <button class="btn btn-sm btn-secondary" (click)="openPicker('target')">
+            {{ targetImage() ? 'Changer' : '+ Sélectionner' }}
+          </button>
+          <button *ngIf="targetImage()" class="btn btn-sm"
+                  style="padding:2px 8px;font-size:11px;color:var(--text-muted);background:transparent;border:1px solid var(--border);"
+                  (click)="clearTarget()">✕</button>
+        </div>
+      </div>
+
+      <ng-container *ngIf="targetImage() as img; else targetPlaceholder">
+        <div style="height:180px;border-radius:6px;overflow:hidden;background:var(--bg-secondary);">
+          <img *ngIf="!targetLoadError()" [src]="imageUrl(img.src)" [alt]="img.name"
+               (error)="onTargetError()"
+               style="width:100%;height:100%;object-fit:contain;">
+          <div *ngIf="targetLoadError()" style="height:100%;display:flex;align-items:center;justify-content:center;flex-direction:column;gap:6px;">
+            <span style="font-size:22px;">⚠️</span>
+            <span style="font-size:12px;color:var(--red);">Erreur de chargement</span>
+            <span style="font-size:10px;color:var(--text-muted);">Formats supportés : PNG, JPEG, WEBP</span>
           </div>
-          <span class="tag" [class.tag-red]="i === 0" [class.tag-green]="i !== 0">{{ f.tag }}</span>
+        </div>
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-top:8px;gap:8px;">
+          <span style="font-size:11px;color:var(--text-secondary);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1;">{{ img.name }}</span>
+          <div style="display:flex;gap:6px;align-items:center;flex-shrink:0;">
+            <span class="tag tag-red">Cible</span>
+            <span style="font-size:10px;color:var(--text-muted);">{{ img.width }}×{{ img.height }}</span>
+            <span style="font-size:10px;color:var(--text-muted);">{{ formatSize(img.size) }}</span>
+          </div>
         </div>
       </ng-container>
-      <button class="btn btn-secondary">+ Comparer une image</button>
+
+      <ng-template #targetPlaceholder>
+        <div style="height:180px;border-radius:6px;border:2px dashed var(--border);display:flex;align-items:center;justify-content:center;flex-direction:column;gap:10px;">
+          <span style="font-size:32px;opacity:0.3;">🖼️</span>
+          <button class="btn btn-sm btn-secondary" (click)="openPicker('target')">Depuis la bibliothèque</button>
+          <button class="btn btn-sm" style="font-size:11px;color:var(--accent);background:transparent;border:1px solid var(--border-accent, var(--border));padding:4px 12px;"
+                  (click)="pickerSlot.set('target'); triggerFileInput()">Depuis mon ordinateur</button>
+        </div>
+      </ng-template>
+    </div>
+
+    <!-- Golden Reference Slot (VIS-109) -->
+    <div class="card" style="padding:12px;transition:border-color 0.2s;"
+         [style.border]="referenceImage() ? '1px solid var(--green)' : '1px solid var(--border)'"
+         [style.background]="referenceImage() ? 'rgba(0,229,160,0.04)' : ''">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
+        <span class="card-title" style="font-size:12px;">Golden Reference</span>
+        <div style="display:flex;gap:6px;">
+          <button class="btn btn-sm btn-secondary" (click)="openPicker('reference')">
+            {{ referenceImage() ? 'Changer' : '+ Comparer une image' }}
+          </button>
+          <button *ngIf="referenceImage()" class="btn btn-sm"
+                  style="padding:2px 8px;font-size:11px;color:var(--text-muted);background:transparent;border:1px solid var(--border);"
+                  (click)="clearReference()">✕</button>
+        </div>
+      </div>
+
+      <ng-container *ngIf="referenceImage() as img; else referencePlaceholder">
+        <div style="height:180px;border-radius:6px;overflow:hidden;background:var(--bg-secondary);">
+          <img *ngIf="!referenceLoadError()" [src]="imageUrl(img.src)" [alt]="img.name"
+               (error)="onReferenceError()"
+               style="width:100%;height:100%;object-fit:contain;">
+          <div *ngIf="referenceLoadError()" style="height:100%;display:flex;align-items:center;justify-content:center;flex-direction:column;gap:6px;">
+            <span style="font-size:22px;">⚠️</span>
+            <span style="font-size:12px;color:var(--red);">Erreur de chargement</span>
+            <span style="font-size:10px;color:var(--text-muted);">Formats supportés : PNG, JPEG, WEBP</span>
+          </div>
+        </div>
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-top:8px;gap:8px;">
+          <span style="font-size:11px;color:var(--text-secondary);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1;">{{ img.name }}</span>
+          <div style="display:flex;gap:6px;align-items:center;flex-shrink:0;">
+            <span class="tag tag-green">Référence</span>
+            <span style="font-size:10px;color:var(--text-muted);">{{ img.width }}×{{ img.height }}</span>
+            <span style="font-size:10px;color:var(--text-muted);">{{ formatSize(img.size) }}</span>
+          </div>
+        </div>
+      </ng-container>
+
+      <ng-template #referencePlaceholder>
+        <div style="height:180px;border-radius:6px;border:2px dashed var(--border);display:flex;align-items:center;justify-content:center;flex-direction:column;gap:10px;">
+          <span style="font-size:32px;opacity:0.3;">🖼️</span>
+          <button class="btn btn-sm btn-secondary" (click)="openPicker('reference')">Depuis la bibliothèque</button>
+          <button class="btn btn-sm" style="font-size:11px;color:var(--accent);background:transparent;border:1px solid var(--border-accent, var(--border));padding:4px 12px;"
+                  (click)="pickerSlot.set('reference'); triggerFileInput()">Depuis mon ordinateur</button>
+        </div>
+      </ng-template>
+    </div>
+
+  </div>
+
+  <!-- ── Coherence Warning (VIS-113) ───────────────────────────────────────── -->
+  <div *ngIf="coherenceIssues().length" class="card"
+       style="margin-bottom:16px;padding:10px 14px;border:1px solid rgba(255,165,0,0.4);background:rgba(255,165,0,0.07);">
+    <div style="display:flex;align-items:flex-start;gap:10px;">
+      <span style="font-size:16px;margin-top:1px;flex-shrink:0;">⚠️</span>
+      <div>
+        <div style="font-size:12px;font-weight:600;color:orange;margin-bottom:4px;">Incohérence détectée entre les deux images</div>
+        <div *ngFor="let issue of coherenceIssues()" style="font-size:11px;color:var(--text-secondary);margin-bottom:2px;">
+          <strong>{{ issue.field }}</strong> — Cible : {{ issue.target }} · Référence : {{ issue.reference }}
+        </div>
+        <div style="font-size:10px;color:var(--text-muted);margin-top:4px;">Les résultats d'analyse peuvent être incorrects avec des images de dimensions différentes.</div>
+      </div>
     </div>
   </div>
 
-  <div style="display:flex;gap:4px;margin-bottom:16px;background:var(--bg-secondary);border-radius:var(--radius-sm);padding:4px;width:fit-content;">
+  <!-- ── Analysis Tabs ──────────────────────────────────────────────────────── -->
+  <div style="display:flex;gap:4px;margin-bottom:16px;background:var(--bg-secondary);border-radius:var(--radius-sm);padding:4px;width:fit-content;flex-wrap:wrap;">
     <button *ngFor="let tab of analysisTabs"
             class="toggle-chip"
             [class.active]="activeTab() === tab"
-            (click)="switchAnalysisTab(tab)">
-      {{ tab }}
-    </button>
+            (click)="switchTab(tab)">{{ tab }}</button>
   </div>
 
-  <div id="analysis-content">
-    <div class="card" style="margin-bottom:16px;padding:12px 16px;">
-      <div style="display:flex;gap:16px;align-items:center;flex-wrap:wrap;">
-        <strong style="font-size:12px;color:var(--text-secondary);">Filtres synchrones:</strong>
-        <label style="display:flex;align-items:center;gap:6px;font-size:12px;"><input type="checkbox"> Grayscale</label>
-        <label style="display:flex;align-items:center;gap:6px;font-size:12px;"><input type="checkbox"> Equaliser Histogramme</label>
-        <div style="width:1px;height:16px;background:var(--border);"></div>
-        <strong style="font-size:12px;color:var(--text-secondary);">Luminosité/Contraste:</strong>
-        <input type="range" style="width:80px;accent-color:var(--accent);">
-      </div>
+  <!-- ── Sync Filters Bar ───────────────────────────────────────────────────── -->
+  <div class="card" style="margin-bottom:16px;padding:12px 16px;">
+    <div style="display:flex;gap:16px;align-items:center;flex-wrap:wrap;">
+      <strong style="font-size:12px;color:var(--text-secondary);">Filtres synchrones :</strong>
+      <label style="display:flex;align-items:center;gap:6px;font-size:12px;"><input type="checkbox"> Grayscale</label>
+      <label style="display:flex;align-items:center;gap:6px;font-size:12px;"><input type="checkbox"> Égaliser Histogramme</label>
+      <div style="width:1px;height:16px;background:var(--border);"></div>
+      <strong style="font-size:12px;color:var(--text-secondary);">Luminosité / Contraste :</strong>
+      <input type="range" style="width:80px;accent-color:var(--accent);">
     </div>
+  </div>
 
-    <div class="grid-2" style="margin-bottom:16px;">
+  <!-- ── No Images Selected ─────────────────────────────────────────────────── -->
+  <ng-container *ngIf="!targetImage() && !referenceImage()">
+    <div class="card" style="padding:48px;text-align:center;border:1px dashed var(--border);">
+      <div style="font-size:40px;margin-bottom:12px;opacity:0.25;">🔍</div>
+      <div style="font-size:14px;color:var(--text-muted);">Sélectionnez une ou deux images pour commencer l'analyse</div>
+      <div style="font-size:12px;color:var(--text-muted);margin-top:6px;">Les images proviennent de la bibliothèque de la Brique 1 — Annotation</div>
+    </div>
+  </ng-container>
+
+  <!-- ── Comparaison Côte à Côte ────────────────────────────────────────────── -->
+  <ng-container *ngIf="(targetImage() || referenceImage()) && activeTab() === analysisTabs[0]">
+    <div class="grid-2" style="gap:12px;">
       <div class="card" style="padding:10px;">
         <div class="card-header" style="margin-bottom:8px;">
-          <span class="card-title" style="font-size:12px;">Image cible (carter_moteur_082)</span>
+          <span class="card-title" style="font-size:12px;">Image Cible</span>
         </div>
-        <div class="viz-placeholder" style="height:280px;position:relative;">
-          <canvas #imgTargetCanvas style="width:100%;height:100%;"></canvas>
-          <div style="position:absolute;top:40%;left:35%;border:2px dashed var(--red);width:80px;height:60px;background:rgba(255,69,103,0.15);"></div>
+        <div style="height:280px;border-radius:6px;overflow:hidden;background:var(--bg-secondary);display:flex;align-items:center;justify-content:center;">
+          <img *ngIf="targetImage()" [src]="imageUrl(targetImage()!.src)"
+               style="width:100%;height:100%;object-fit:contain;" [alt]="targetImage()!.name">
+          <span *ngIf="!targetImage()" style="font-size:12px;color:var(--text-muted);">Aucune image cible</span>
         </div>
-        <div style="display:flex;justify-content:space-between;margin-top:8px;font-size:10px;color:var(--text-muted);">
-          <span>Max intensité: 245</span><span>Sharpness: 4.2</span>
+        <div *ngIf="targetImage()" style="display:flex;justify-content:space-between;margin-top:8px;font-size:10px;color:var(--text-muted);">
+          <span>{{ targetImage()!.width }}×{{ targetImage()!.height }}px</span>
+          <span>{{ targetImage()!.format }}</span>
+          <span>{{ formatSize(targetImage()!.size) }}</span>
         </div>
       </div>
 
@@ -57,41 +168,293 @@
         <div class="card-header" style="margin-bottom:8px;">
           <span class="card-title" style="font-size:12px;">Golden Reference</span>
         </div>
-        <div class="viz-placeholder" style="height:280px;position:relative;">
-          <canvas #imgRefCanvas style="width:100%;height:100%;"></canvas>
+        <div style="height:280px;border-radius:6px;overflow:hidden;background:var(--bg-secondary);display:flex;align-items:center;justify-content:center;">
+          <img *ngIf="referenceImage()" [src]="imageUrl(referenceImage()!.src)"
+               style="width:100%;height:100%;object-fit:contain;" [alt]="referenceImage()!.name">
+          <span *ngIf="!referenceImage()" style="font-size:12px;color:var(--text-muted);">Aucune référence sélectionnée</span>
         </div>
-        <div style="display:flex;justify-content:space-between;margin-top:8px;font-size:10px;color:var(--text-muted);">
-          <span>Max intensité: 242</span><span>Sharpness: 4.5</span>
+        <div *ngIf="referenceImage()" style="display:flex;justify-content:space-between;margin-top:8px;font-size:10px;color:var(--text-muted);">
+          <span>{{ referenceImage()!.width }}×{{ referenceImage()!.height }}px</span>
+          <span>{{ referenceImage()!.format }}</span>
+          <span>{{ formatSize(referenceImage()!.size) }}</span>
         </div>
       </div>
     </div>
+  </ng-container>
 
-    <div class="card" style="margin-bottom:16px;">
-      <div class="card-header" style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:12px;">
-        <span class="card-title">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 16V8a2 2 0 00-1-1.73l-7-4a2 2 0 00-2 0l-7 4A2 2 0 003 8v8a2 2 0 001 1.73l7 4a2 2 0 002 0l7-4A2 2 0 0021 16z"/></svg>
-          Simulation Data Augmentation (Transformation Batch)
-        </span>
-        <button class="btn btn-sm btn-primary">Générer aperçus</button>
-      </div>
+  <!-- ── Superposition (Difference) — Canvas API ───────────────────────────── -->
+  <ng-container *ngIf="activeTab() === analysisTabs[1]">
 
-      <div style="display:flex;gap:12px;margin-bottom:16px;flex-wrap:wrap;">
-        <label style="font-size:12px;color:var(--accent);border:1px solid var(--border-accent);padding:4px 8px;border-radius:4px;"><input type="checkbox" checked> Crop (Aléatoire)</label>
-        <label style="font-size:12px;color:var(--accent);border:1px solid var(--border-accent);padding:4px 8px;border-radius:4px;"><input type="checkbox" checked> Rotation (-15°..15°)</label>
-        <label style="font-size:12px;color:var(--accent);border:1px solid var(--border-accent);padding:4px 8px;border-radius:4px;"><input type="checkbox" checked> Mixup (alpha 0.2)</label>
-        <label style="font-size:12px;border:1px solid var(--border);padding:4px 8px;border-radius:4px;"><input type="checkbox"> Cutout</label>
-      </div>
+    <!-- Need both images -->
+    <div *ngIf="!targetImage() || !referenceImage()" class="card"
+         style="padding:40px;text-align:center;border:1px dashed var(--border);">
+      <div style="font-size:32px;margin-bottom:10px;opacity:0.3;">🔲</div>
+      <div style="font-size:13px;color:var(--text-muted);">Sélectionnez une image cible ET une référence pour calculer la différence</div>
+    </div>
 
-      <div class="grid-4">
-        <ng-container *ngFor="let aug of augmentationPreviews">
-          <div>
-            <div class="viz-placeholder" style="height:120px;margin-bottom:6px;" [style.filter]="aug.filter">
-              <canvas #augPreviewCanvas width="200" height="120" style="width:100%;height:100%;"></canvas>
-            </div>
-            <div style="font-size:11px;text-align:center;color:var(--text-secondary);">{{ aug.title }}</div>
+    <ng-container *ngIf="targetImage() && referenceImage()">
+      <!-- Controls -->
+      <div class="card" style="padding:12px 16px;margin-bottom:12px;">
+        <div style="display:flex;gap:20px;align-items:center;flex-wrap:wrap;">
+          <strong style="font-size:12px;color:var(--text-secondary);">Amplification :</strong>
+          <div style="display:flex;align-items:center;gap:8px;">
+            <input type="range" min="1" max="10" step="1"
+                   [value]="diffAmplification()"
+                   (input)="onAmpChange($event)"
+                   style="width:100px;accent-color:var(--accent);">
+            <span style="font-size:12px;font-weight:600;min-width:20px;">×{{ diffAmplification() }}</span>
           </div>
-        </ng-container>
+          <div style="width:1px;height:16px;background:var(--border);"></div>
+          <label style="display:flex;align-items:center;gap:6px;font-size:12px;cursor:pointer;">
+            <input type="checkbox"
+                   [checked]="diffGrayscale()"
+                   (change)="onGrayscaleChange($event)"> Niveaux de gris
+          </label>
+          <div style="margin-left:auto;">
+            <button class="btn btn-sm btn-secondary" [disabled]="computingDiff()" (click)="computeDifference()">
+              {{ computingDiff() ? 'Calcul…' : '↺ Recalculer' }}
+            </button>
+          </div>
+        </div>
       </div>
+
+      <!-- Error -->
+      <div *ngIf="diffError()" class="card"
+           style="padding:12px 16px;margin-bottom:12px;border:1px solid rgba(255,69,103,0.4);background:rgba(255,69,103,0.07);font-size:12px;color:var(--red);">
+        ⚠️ {{ diffError() }}
+      </div>
+
+      <!-- Computing spinner -->
+      <div *ngIf="computingDiff()" class="card" style="padding:48px;text-align:center;">
+        <div style="font-size:13px;color:var(--text-muted);">Calcul de la différence en cours…</div>
+      </div>
+
+      <!-- Result -->
+      <ng-container *ngIf="!computingDiff() && diffImageUrl()">
+        <!-- Stats bar -->
+        <div *ngIf="diffStats()" class="card" style="padding:10px 16px;margin-bottom:12px;">
+          <div style="display:flex;gap:24px;flex-wrap:wrap;">
+            <div style="text-align:center;">
+              <div style="font-size:18px;font-weight:700;color:var(--accent);">{{ diffStats()!.maxDiff }}</div>
+              <div style="font-size:10px;color:var(--text-muted);">Diff max (0–255)</div>
+            </div>
+            <div style="text-align:center;">
+              <div style="font-size:18px;font-weight:700;color:var(--accent);">{{ diffStats()!.meanDiff | number:'1.1-1' }}</div>
+              <div style="font-size:10px;color:var(--text-muted);">Diff moyenne</div>
+            </div>
+            <div style="text-align:center;">
+              <div style="font-size:18px;font-weight:700;"
+                   [style.color]="diffStats()!.changedPct > 5 ? 'var(--red)' : diffStats()!.changedPct > 1 ? 'orange' : 'var(--green)'">
+                {{ diffStats()!.changedPct | number:'1.2-2' }}%
+              </div>
+              <div style="font-size:10px;color:var(--text-muted);">Pixels modifiés (seuil &gt;10)</div>
+            </div>
+            <div style="margin-left:auto;display:flex;align-items:center;">
+              <span style="font-size:11px;color:var(--text-muted);">
+                Pixels clairs = zone de différence · Pixels noirs = identiques
+              </span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Difference image -->
+        <div class="card" style="padding:10px;">
+          <div class="card-header" style="margin-bottom:8px;">
+            <span class="card-title" style="font-size:12px;">Image de différence (×{{ diffAmplification() }})</span>
+          </div>
+          <img [src]="diffImageUrl()" alt="Différence"
+               style="width:100%;border-radius:6px;image-rendering:pixelated;">
+        </div>
+      </ng-container>
+    </ng-container>
+  </ng-container>
+
+  <!-- ── Analyse Spectrale FFT 2D — Canvas API ────────────────────────────── -->
+  <ng-container *ngIf="activeTab() === analysisTabs[2]">
+
+    <div *ngIf="!targetImage() && !referenceImage()" class="card"
+         style="padding:40px;text-align:center;border:1px dashed var(--border);">
+      <div style="font-size:32px;margin-bottom:10px;opacity:0.3;">〰️</div>
+      <div style="font-size:13px;color:var(--text-muted);">Sélectionnez une image pour analyser son spectre de fréquences</div>
+    </div>
+
+    <ng-container *ngIf="targetImage() || referenceImage()">
+      <div class="card" style="padding:12px 16px;margin-bottom:12px;">
+        <div style="display:flex;gap:20px;align-items:center;flex-wrap:wrap;">
+          <strong style="font-size:12px;color:var(--text-secondary);">Image :</strong>
+          <div style="display:flex;gap:4px;">
+            <button class="toggle-chip" [class.active]="fftSlot() === 'target'"
+                    [disabled]="!targetImage()" (click)="fftSlot.set('target')">Cible</button>
+            <button class="toggle-chip" [class.active]="fftSlot() === 'reference'"
+                    [disabled]="!referenceImage()" (click)="fftSlot.set('reference')">Référence</button>
+          </div>
+          <div style="width:1px;height:16px;background:var(--border);"></div>
+          <strong style="font-size:12px;color:var(--text-secondary);">Résolution FFT :</strong>
+          <div style="display:flex;gap:4px;">
+            <button class="toggle-chip" [class.active]="fftSize() === 128" (click)="fftSize.set(128)">128²</button>
+            <button class="toggle-chip" [class.active]="fftSize() === 256" (click)="fftSize.set(256)">256²</button>
+            <button class="toggle-chip" [class.active]="fftSize() === 512" (click)="fftSize.set(512)">512²</button>
+          </div>
+          <div style="margin-left:auto;font-size:11px;color:var(--text-muted);">
+            Centre = basses fréquences (DC) · Bords = hautes fréquences
+          </div>
+        </div>
+      </div>
+
+      <div *ngIf="fftError()" class="card"
+           style="padding:12px 16px;margin-bottom:12px;border:1px solid rgba(255,69,103,0.4);background:rgba(255,69,103,0.07);font-size:12px;color:var(--red);">
+        ⚠️ {{ fftError() }}
+      </div>
+
+      <div *ngIf="computingFft()" class="card" style="padding:48px;text-align:center;">
+        <div style="font-size:13px;color:var(--text-muted);">Calcul FFT 2D {{ fftSize() }}×{{ fftSize() }} en cours…</div>
+      </div>
+
+      <div *ngIf="!computingFft() && fftImageUrl()" class="card" style="padding:10px;">
+        <div class="card-header" style="margin-bottom:8px;display:flex;justify-content:space-between;align-items:center;">
+          <span class="card-title" style="font-size:12px;">Spectre de fréquences — Log-magnitude {{ fftSize() }}×{{ fftSize() }}</span>
+          <span style="font-size:10px;color:var(--text-muted);">Color map "hot" : noir → rouge → jaune → blanc</span>
+        </div>
+        <div style="display:flex;justify-content:center;">
+          <img [src]="fftImageUrl()" alt="FFT Spectrum"
+               style="max-width:512px;width:100%;border-radius:6px;image-rendering:pixelated;">
+        </div>
+      </div>
+    </ng-container>
+  </ng-container>
+
+  <!-- ── Extraction Contours (Sobel / Canny) — Canvas API ─────────────────── -->
+  <ng-container *ngIf="activeTab() === analysisTabs[4]">
+
+    <div *ngIf="!targetImage() && !referenceImage()" class="card"
+         style="padding:40px;text-align:center;border:1px dashed var(--border);">
+      <div style="font-size:32px;margin-bottom:10px;opacity:0.3;">📐</div>
+      <div style="font-size:13px;color:var(--text-muted);">Sélectionnez au moins une image pour détecter les contours</div>
+    </div>
+
+    <ng-container *ngIf="targetImage() || referenceImage()">
+      <!-- Controls -->
+      <div class="card" style="padding:12px 16px;margin-bottom:12px;">
+        <div style="display:flex;gap:20px;align-items:center;flex-wrap:wrap;">
+
+          <strong style="font-size:12px;color:var(--text-secondary);">Image :</strong>
+          <div style="display:flex;gap:4px;">
+            <button class="toggle-chip" [class.active]="contourSlot() === 'target'"
+                    [disabled]="!targetImage()" (click)="contourSlot.set('target')">Cible</button>
+            <button class="toggle-chip" [class.active]="contourSlot() === 'reference'"
+                    [disabled]="!referenceImage()" (click)="contourSlot.set('reference')">Référence</button>
+          </div>
+
+          <div style="width:1px;height:16px;background:var(--border);"></div>
+
+          <strong style="font-size:12px;color:var(--text-secondary);">Méthode :</strong>
+          <div style="display:flex;gap:4px;">
+            <button class="toggle-chip" [class.active]="contourMethod() === 'sobel'"
+                    (click)="contourMethod.set('sobel')">Sobel</button>
+            <button class="toggle-chip" [class.active]="contourMethod() === 'canny'"
+                    (click)="contourMethod.set('canny')">Canny</button>
+          </div>
+
+          <ng-container *ngIf="contourMethod() === 'canny'">
+            <div style="width:1px;height:16px;background:var(--border);"></div>
+            <strong style="font-size:12px;color:var(--text-secondary);">Seuil :</strong>
+            <div style="display:flex;align-items:center;gap:8px;">
+              <input type="range" min="20" max="200" step="5"
+                     [value]="contourThreshold()"
+                     (input)="onContourThresholdChange($event)"
+                     style="width:100px;accent-color:var(--accent);">
+              <span style="font-size:12px;font-weight:600;min-width:30px;">{{ contourThreshold() }}</span>
+            </div>
+          </ng-container>
+        </div>
+      </div>
+
+      <!-- Error -->
+      <div *ngIf="contourError()" class="card"
+           style="padding:12px 16px;margin-bottom:12px;border:1px solid rgba(255,69,103,0.4);background:rgba(255,69,103,0.07);font-size:12px;color:var(--red);">
+        ⚠️ {{ contourError() }}
+      </div>
+
+      <!-- Computing -->
+      <div *ngIf="computingContour()" class="card" style="padding:48px;text-align:center;">
+        <div style="font-size:13px;color:var(--text-muted);">Détection des contours en cours…</div>
+      </div>
+
+      <!-- Result -->
+      <div *ngIf="!computingContour() && contourImageUrl()" class="card" style="padding:10px;">
+        <div class="card-header" style="margin-bottom:8px;display:flex;justify-content:space-between;align-items:center;">
+          <span class="card-title" style="font-size:12px;">
+            Contours — {{ contourMethod() === 'sobel' ? 'Sobel (gradient)' : 'Canny (seuil ' + contourThreshold() + ')' }}
+          </span>
+          <span style="font-size:10px;color:var(--text-muted);">Pixels clairs = zones de fort gradient</span>
+        </div>
+        <img [src]="contourImageUrl()" alt="Contours" style="width:100%;border-radius:6px;">
+      </div>
+    </ng-container>
+  </ng-container>
+
+  <!-- ── Autres onglets — à implémenter ─────────────────────────────────────── -->
+  <ng-container *ngIf="(targetImage() || referenceImage()) && activeTab() !== analysisTabs[0] && activeTab() !== analysisTabs[1] && activeTab() !== analysisTabs[4]">
+    <div class="card" style="padding:48px;text-align:center;border:1px dashed var(--border);">
+      <div style="font-size:32px;margin-bottom:12px;opacity:0.3;">⚙️</div>
+      <div style="font-size:14px;color:var(--text-muted);">{{ activeTab() }}</div>
+      <div style="font-size:12px;color:var(--text-muted);margin-top:6px;">Étape suivante</div>
+    </div>
+  </ng-container>
+
+  <!-- ── Image Picker Modal (VIS-108, VIS-110) ──────────────────────────────── -->
+  <div *ngIf="showPicker()" class="picker-overlay" (click)="closePicker()">
+    <div class="picker-modal" (click)="$event.stopPropagation()">
+
+      <div style="padding:16px 20px;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:center;flex-shrink:0;gap:12px;">
+        <span class="card-title">
+          {{ pickerSlot() === 'target' ? 'Sélectionner l\'image cible' : 'Sélectionner la Golden Reference' }}
+        </span>
+        <div style="display:flex;gap:8px;align-items:center;">
+          <button class="btn btn-sm btn-primary" [disabled]="uploading()" (click)="triggerFileInput()">
+            {{ uploading() ? 'Upload en cours…' : '+ Depuis mon ordinateur' }}
+          </button>
+          <button class="btn btn-sm"
+                  style="padding:4px 10px;color:var(--text-muted);background:transparent;border:1px solid var(--border);"
+                  (click)="closePicker()">✕</button>
+        </div>
+      </div>
+
+      <!-- Upload error (VIS-111) -->
+      <div *ngIf="uploadError()" style="padding:10px 20px;background:rgba(255,69,103,0.08);border-bottom:1px solid rgba(255,69,103,0.3);display:flex;align-items:center;gap:8px;font-size:12px;color:var(--red);flex-shrink:0;">
+        <span>⚠️</span>
+        <span>{{ uploadError() }}</span>
+      </div>
+
+      <!-- Loading -->
+      <div *ngIf="loading()" style="padding:48px;text-align:center;color:var(--text-muted);font-size:13px;">
+        Chargement de la bibliothèque...
+      </div>
+
+      <!-- Empty library -->
+      <div *ngIf="!loading() && images().length === 0" style="padding:48px;text-align:center;">
+        <div style="font-size:40px;margin-bottom:12px;opacity:0.25;">📂</div>
+        <div style="font-size:14px;color:var(--text-muted);">Aucune image dans la bibliothèque</div>
+        <div style="font-size:12px;color:var(--text-muted);margin-top:6px;">Uploadez des images depuis le module Annotation (Brique 1)</div>
+      </div>
+
+      <!-- Image grid (VIS-108) -->
+      <div *ngIf="!loading() && images().length > 0" class="picker-grid">
+        <div *ngFor="let img of images()"
+             class="picker-item"
+             [class.picker-item--selected]="(pickerSlot() === 'target' ? targetImage()?.id : referenceImage()?.id) === img.id"
+             (click)="selectImage(img)">
+          <div class="picker-thumb">
+            <img [src]="imageUrl(img.src)" [alt]="img.name" loading="lazy">
+          </div>
+          <div style="padding:6px 8px;">
+            <div style="font-size:10px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">{{ img.name }}</div>
+            <div style="font-size:9px;color:var(--text-muted);margin-top:2px;">{{ img.format }} · {{ img.width }}×{{ img.height }}</div>
+          </div>
+        </div>
+      </div>
+
     </div>
   </div>
+
 </div>
